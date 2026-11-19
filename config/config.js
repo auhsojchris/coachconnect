@@ -19,13 +19,20 @@ const base = {
 module.exports = {
   development: { ...base },
   test: { ...base, database: `${process.env.DB_NAME}_test` },
-  production: {
-    ...base,
-    dialectOptions: {
-      ssl: {
-        require: true,
-        rejectUnauthorized: false,
+  production: process.env.DATABASE_URL
+    ? {
+        use_env_variable: 'DATABASE_URL',
+        dialect: 'postgres',
+        dialectOptions: { ssl: { require: true, rejectUnauthorized: false } },
+        define: base.define,
+      }
+    : {
+        ...base,
+        dialectOptions: {
+          ssl: {
+            require: true,
+            rejectUnauthorized: false,
+          },
+        },
       },
-    },
-  },
 };

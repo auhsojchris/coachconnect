@@ -1,19 +1,12 @@
 const multer = require('multer');
-const path = require('path');
-const crypto = require('crypto');
 const ApiError = require('../utils/ApiError');
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, path.join(process.cwd(), process.env.UPLOAD_PATH || 'uploads/coaches'));
-  },
-  filename: (req, file, cb) => {
-    const uniqueName = `${crypto.randomUUID()}${path.extname(file.originalname).toLowerCase()}`;
-    cb(null, uniqueName);
-  },
-});
+// Memory storage: the serverless deployment has no writable persistent disk,
+// so uploaded files are buffered in memory and handed to utils/imageUpload.js,
+// which puts them in Vercel Blob (or local disk when running outside Vercel).
+const storage = multer.memoryStorage();
 
 const fileFilter = (req, file, cb) => {
   if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {

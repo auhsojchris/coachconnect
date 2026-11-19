@@ -1,4 +1,5 @@
 node_modules/
+.vercel
 .env
 uploads/coaches/*
 !uploads/coaches/.gitkeep
@@ -6,3 +7,6 @@ npm-debug.log*
 coverage/
 *.log
 .DS_Store
+
+.vercel
+.env*

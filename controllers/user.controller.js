@@ -2,6 +2,7 @@ const { User, Role, ClientProfile, Coach, CoachSpecialization, SportCategory } =
 const ApiError = require('../utils/ApiError');
 const catchAsync = require('../utils/catchAsync');
 const { sendResponse } = require('../utils/ApiResponse');
+const { uploadImage } = require('../utils/imageUpload');
 
 const profileInclude = [
   { model: Role, as: 'role' },
@@ -56,7 +57,7 @@ const uploadProfileImage = catchAsync(async (req, res) => {
 
   const user = await User.findByPk(req.user.id);
   if (!user) throw ApiError.notFound('User not found');
-  user.profileImage = `/uploads/coaches/${req.file.filename}`;
+  user.profileImage = await uploadImage(req.file);
   await user.save();
 
   sendResponse(res, 200, 'Profile image uploaded', { profileImage: user.profileImage });

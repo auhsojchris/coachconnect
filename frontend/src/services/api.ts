@@ -14,6 +14,7 @@ export interface AppNotification { id: string; title: string; message: string; i
 export interface Message { id: string; content: string; isRead: boolean; createdAt: string; sender?: User; recipient?: User; bookingId: string; }
 export interface DashboardStats { totalUsers: number; totalCoaches: number; totalClients: number; totalRevenue: number; bookingsByStatus: Record<string, number>; reviewsPendingModeration: number; recentBookings: Booking[]; gcashCommissionOwed: number; gcashPayoutOwed: number; totalCommissionEarned: number; }
 export interface SavedPaymentMethod { id: string; brand: string; last4: string; expMonth: number; expYear: number; isDefault: boolean; }
+export interface PlatformStats { coachCount: number; sportCount: number; completedSessions: number; averageRating: number | null; reviewCount: number; }
 
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 
@@ -64,6 +65,9 @@ export const api = {
     if (!response.ok) throw new Error(body.message || 'Could not upload profile image.');
     return body as { data: { profileImage: string } };
   },
+
+  // ---- Platform stats ----
+  stats: () => request<{ data: PlatformStats }>('/stats'),
 
   // ---- Sport categories ----
   sportCategories: () => request<{ data: SportCategory[] }>('/sport-categories'),

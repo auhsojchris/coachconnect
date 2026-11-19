@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Bell, CalendarDays, Check, CircleUserRound, CreditCard, Dumbbell, Heart, LogOut, Menu, Pause, Play, Search, ShieldCheck, Star, X } from 'lucide-react';
-import { api, AppNotification, Booking, Coach, Review, Role, SportCategory, TimeSlot, User } from './services/api';
+import { api, AppNotification, Booking, Coach, PlatformStats, Review, Role, SportCategory, TimeSlot, User } from './services/api';
 import { EmptyState, ErrorMessage, Loading, Stat } from './components/shared';
 import Checkout from './pages/Checkout';
 import ReviewForm from './pages/ReviewForm';
@@ -56,9 +56,20 @@ function Layout({ session, onLogout }: { session: Session | null; onLogout: () =
   </div>;
 }
 
-function Home() { return <>
-  <section className="hero"><div className="hero-copy"><p className="eyebrow">COACHING, ON YOUR TERMS</p><h1>Your next<br /><em>stronger</em> self<br />starts here.</h1><p className="hero-lede">Book one-on-one coaching with people who know how to make progress feel personal.</p><Link className="button" to="/coaches">Explore coaches <ArrowRight size={17} /></Link><div className="trust-row"><span><ShieldCheck size={17} /> Verified coaches</span><span><Star size={17} fill="currentColor" /> 4.9 average rating</span></div></div><div className="hero-art"><div className="art-circle"><div className="runner">TRAIN<br /><strong>PLAY<br />HARD</strong></div></div><div className="art-note">01 <span>MOVE WITH PURPOSE</span></div></div></section>
-  <section className="metrics"><Link to="/coaches" aria-label="View coaches"><strong>1,200+</strong><span>coaches ready</span></Link><div><strong>32</strong><span>sports & disciplines</span></div><div><strong>18k</strong><span>sessions completed</span></div><div><strong>4.9/5</strong><span>athlete rating</span></div></section>
+// Large counts read better abbreviated (e.g. 18k); small ones stay exact so
+// early-stage real numbers (e.g. 3 coaches) don't look like a rounding error.
+function formatMetric(value: number): string {
+  if (value >= 1000) return `${Math.round(value / 100) / 10}k`.replace('.0k', 'k');
+  return String(value);
+}
+
+function Home() {
+  const [stats, setStats] = useState<PlatformStats | null>(null);
+  useEffect(() => { api.stats().then((res) => setStats(res.data)).catch(() => setStats(null)); }, []);
+
+  return <>
+  <section className="hero"><div className="hero-copy"><p className="eyebrow">COACHING, ON YOUR TERMS</p><h1>Your next<br /><em>stronger</em> self<br />starts here.</h1><p className="hero-lede">Book one-on-one coaching with people who know how to make progress feel personal.</p><Link className="button" to="/coaches">Explore coaches <ArrowRight size={17} /></Link><div className="trust-row"><span><ShieldCheck size={17} /> Verified coaches</span><span><Star size={17} fill="currentColor" /> {stats?.averageRating ? `${stats.averageRating} average rating` : 'New on CoachConnect'}</span></div></div><div className="hero-art"><div className="art-circle"><div className="runner">TRAIN<br /><strong>PLAY<br />HARD</strong></div></div><div className="art-note">01 <span>MOVE WITH PURPOSE</span></div></div></section>
+  <section className="metrics"><Link to="/coaches" aria-label="View coaches"><strong>{stats ? formatMetric(stats.coachCount) : '—'}</strong><span>coaches ready</span></Link><div><strong>{stats ? formatMetric(stats.sportCount) : '—'}</strong><span>sports & disciplines</span></div><div><strong>{stats ? formatMetric(stats.completedSessions) : '—'}</strong><span>sessions completed</span></div><div><strong>{stats?.averageRating ? `${stats.averageRating}/5` : 'New'}</strong><span>athlete rating</span></div></section>
   <HomeSportsShowcase />
   <section className="home-section"><div className="section-heading"><div><p className="eyebrow">THE COACHCONNECT METHOD</p><h2>Training that meets<br /><span>you where you are.</span></h2></div><Link to="/about" className="underlink">See how it works <ArrowRight size={16} /></Link></div><div className="feature-grid"><Feature number="01" title="Find your fit" copy="Browse verified experts by sport, style, location, and rate." icon={<Search />} /><Feature number="02" title="Book with ease" copy="See real availability and reserve a time that works for your life." icon={<CalendarDays />} /><Feature number="03" title="Keep growing" copy="Build momentum with a coach who is invested in your progress." icon={<Heart />} /></div></section>
   <section className="dark-band"><div><p className="eyebrow light">YOUR GAME PLAN</p><h2>Small steps.<br /><em>Big energy.</em></h2></div><Link className="button light-button" to="/coaches">Start your search <ArrowRight size={17} /></Link></section>

@@ -10,6 +10,7 @@ const sportCategoryRoutes = require('./sportCategory.routes');
 const notificationRoutes = require('./notification.routes');
 const adminRoutes = require('./admin.routes');
 const messageRoutes = require('./message.routes');
+const statsRoutes = require('./stats.routes');
 
 const router = express.Router();
 
@@ -23,5 +24,6 @@ router.use('/sport-categories', sportCategoryRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/admin', adminRoutes);
 router.use('/messages', messageRoutes);
+router.use('/stats', statsRoutes);
 
 module.exports = router;

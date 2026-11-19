@@ -8,6 +8,7 @@ const {
   CoachSpecialization,
   TimeSlot,
 } = require('../models');
+const { uploadImage } = require('../utils/imageUpload');
 const ApiError = require('../utils/ApiError');
 const catchAsync = require('../utils/catchAsync');
 const { sendResponse } = require('../utils/ApiResponse');
@@ -162,7 +163,7 @@ const uploadProfileImage = catchAsync(async (req, res) => {
   if (!req.file) throw ApiError.badRequest('No image file provided');
 
   const user = await User.findByPk(coach.userId);
-  user.profileImage = `/uploads/coaches/${req.file.filename}`;
+  user.profileImage = await uploadImage(req.file);
   await user.save();
 
   sendResponse(res, 200, 'Profile image uploaded', { profileImage: user.profileImage });

@@ -315,9 +315,9 @@ input:focus, select:focus { border-color: var(--turf); }
   .runner strong { font-size: 2.8rem; }
   .feature-grid, .coach-grid { grid-template-columns: 1fr; }
   .feature { min-height: 200px; }
-  .metrics { padding: 22px 7vw; }
+  .metrics { grid-template-columns: repeat(2,1fr); row-gap: 22px; padding: 24px 7vw; }
   .metrics strong { font-size: 1.3rem; }
-  .metrics div { padding-left: 15px; }
+  .metrics > div, .metrics > a { border-left: 0; padding-left: 0; text-align: center; }
   .home-showcase { grid-template-columns: 1fr; margin: 40px 5vw; }
   .home-showcase-image-wrap { min-height: 240px; }
   .home-showcase-copy { padding: 30px 20px 70px; }
