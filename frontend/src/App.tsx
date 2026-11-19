@@ -253,8 +253,10 @@ function Dashboard({ session, onLogout, onUserChange }: { session: Session; onLo
     const timer = window.setInterval(refreshUnread, 15000);
     return () => window.clearInterval(timer);
   }, [role, location.pathname]);
+  useEffect(() => setMobile(false), [location.pathname]);
   const isActive = (path: string) => location.pathname === path;
   return <section className="dashboard">
+    {mobile && <div className="sidebar-backdrop" onClick={() => setMobile(false)} />}
     <aside className={mobile ? 'sidebar mobile-open' : 'sidebar'}>
       <div className="sidebar-top"><Link to="/" className="brand"><span className="brand-mark"><Dumbbell size={18} /></span> COACHCONNECT</Link><button className="icon-btn" onClick={() => setMobile(false)}><X /></button></div>
       <p className="side-label">WORKSPACE</p>
