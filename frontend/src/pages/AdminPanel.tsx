@@ -1,0 +1,342 @@
+import { useEffect, useState } from 'react';
+import { CircleUserRound, Dumbbell, Flag, Percent, ShieldCheck, Users } from 'lucide-react';
+import { api, DashboardStats, Payment, Review, Role, SportCategory, User } from '../services/api';
+import { Loading, Stat } from '../components/shared';
+
+type Tab = 'overview' | 'users' | 'categories' | 'reviews' | 'commissions' | 'payouts' | 'settings';
+
+export default function AdminPanel() {
+  const [tab, setTab] = useState<Tab>('overview');
+  return <div className="content-page">
+    <div className="dash-header"><div><p className="eyebrow">ADMIN COMMAND CENTER</p><h1>System overview</h1><p className="muted">A clear view of what is moving through CoachConnect.</p></div></div>
+    <div className="tab-strip">
+      {(['overview', 'users', 'categories', 'reviews', 'commissions', 'payouts', 'settings'] as Tab[]).map((t) => (
+        <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{t[0].toUpperCase() + t.slice(1)}</button>
+      ))}
+    </div>
+    {tab === 'overview' && <Overview />}
+    {tab === 'users' && <UsersPanel />}
+    {tab === 'categories' && <CategoriesPanel />}
+    {tab === 'reviews' && <ReviewsPanel />}
+    {tab === 'commissions' && <CommissionsPanel />}
+    {tab === 'payouts' && <PayoutsPanel />}
+    {tab === 'settings' && <SettingsPanel />}
+  </div>;
+}
+
+function Overview() {
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  useEffect(() => { api.adminStats().then((r) => setStats(r.data)).catch(() => {}); }, []);
+  if (!stats) return <Loading />;
+  return <>
+    <div className="stat-grid">
+      <Stat label="Total users" value={String(stats.totalUsers)} icon={<Users />} />
+      <Stat label="Active coaches" value={String(stats.totalCoaches)} icon={<Dumbbell />} />
+      <Stat label="Athletes" value={String(stats.totalClients)} icon={<CircleUserRound />} />
+      <Stat label="Revenue" value={`₱${Number(stats.totalRevenue).toLocaleString()}`} icon={<span>₱</span>} />
+      <Stat label="Total commission" value={`₱${stats.totalCommissionEarned.toLocaleString()}`} icon={<Percent />} />
+    </div>
+    {stats.gcashCommissionOwed > 0 && (
+      <p className="muted" style={{ marginBottom: 8 }}>
+        <strong style={{ color: 'var(--orange)' }}>₱{stats.gcashCommissionOwed.toLocaleString()}</strong> in GCash commission owed by coaches — see the Commissions tab.
+      </p>
+    )}
+    {stats.gcashPayoutOwed > 0 && (
+      <p className="muted" style={{ marginBottom: 24 }}>
+        <strong style={{ color: 'var(--turf-dark)' }}>₱{stats.gcashPayoutOwed.toLocaleString()}</strong> owed to coaches from automatic GCash payments — see the Payouts tab.
+      </p>
+    )}
+    <div className="dash-columns">
+      <section className="dash-panel">
+        <div className="panel-heading"><div><p className="eyebrow">BOOKINGS</p><h2>Booking health</h2></div></div>
+        {Object.entries(stats.bookingsByStatus).map(([key, value]) => (
+          <div className="bar-row" key={key}><span>{key}</span><div><i style={{ width: `${Math.min(100, value * 8 + 5)}%` }} /></div><strong>{value}</strong></div>
+        ))}
+      </section>
+      <section className="dash-panel accent-panel">
+        <p className="eyebrow">MODERATION QUEUE</p>
+        <h2>{stats.reviewsPendingModeration} reviews flagged</h2>
+        <p>Keep the community helpful, honest, and useful for every athlete.</p>
+      </section>
+    </div>
+  </>;
+}
+
+function UsersPanel() {
+  const [users, setUsers] = useState<User[]>([]);
+  const [search, setSearch] = useState('');
+  const [role, setRole] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [newUser, setNewUser] = useState({ name: '', email: '', password: '', role: 'client' as Role });
+  const [createMessage, setCreateMessage] = useState('');
+
+  const refresh = () => { setLoading(true); api.adminUsers({ search: search || undefined, role: (role || undefined) as Role | undefined }).then((r) => setUsers(r.data)).finally(() => setLoading(false)); };
+  useEffect(refresh, []);
+
+  const toggleActive = async (u: User) => { await api.adminUpdateUser(u.id, { isActive: !u.isActive }); refresh(); };
+  const remove = async (u: User) => { if (!confirm(`Delete ${u.name}? This cannot be undone.`)) return; try { await api.adminDeleteUser(u.id); refresh(); } catch (e) { alert(e instanceof Error ? e.message : 'Could not delete user.'); } };
+  const verify = async (u: User) => { if (!u.coachProfile) return; await api.adminVerifyCoach(u.coachProfile.id, !u.coachProfile.isVerified); refresh(); };
+  const addUser = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try { await api.adminCreateUser(newUser); setNewUser({ name: '', email: '', password: '', role: 'client' }); setCreateMessage('User created.'); refresh(); }
+    catch (error) { setCreateMessage(error instanceof Error ? error.message : 'Could not create user.'); }
+  };
+
+  return <div className="dash-panel">
+    <form onSubmit={addUser} className="mini-form" style={{ marginBottom: 24 }}>
+      <label>Name<input required value={newUser.name} onChange={(e) => setNewUser({ ...newUser, name: e.target.value })} /></label>
+      <label>Email<input required type="email" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} /></label>
+      <label>Temporary password<input required minLength={8} value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} /></label>
+      <label>Role<select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value as Role })}><option value="client">Athlete</option><option value="coach">Coach</option><option value="admin">Admin</option></select></label>
+      <button className="button" type="submit">Add user</button>
+      {createMessage && <p className="form-message" style={{ gridColumn: '1 / -1' }}>{createMessage}</p>}
+    </form>
+    <div className="filter-bar">
+      <input placeholder="Search name or email…" value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && refresh()} />
+      <select value={role} onChange={(e) => { setRole(e.target.value); }}>
+        <option value="">All roles</option>
+        <option value="client">Athletes</option>
+        <option value="coach">Coaches</option>
+        <option value="admin">Admins</option>
+      </select>
+      <button className="btn-outline" onClick={refresh}>Filter</button>
+    </div>
+    {loading ? <Loading /> : (
+      <table className="data-table">
+        <thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Coach</th><th></th></tr></thead>
+        <tbody>
+          {users.map((u) => (
+            <tr key={u.id}>
+              <td><strong>{u.name}</strong><br /><span className="muted">{u.email}</span></td>
+              <td style={{ textTransform: 'capitalize' }}>{u.role?.name}</td>
+              <td><span className={`badge-status ${u.isActive ? 'confirmed' : 'cancelled'}`}>{u.isActive ? 'active' : 'suspended'}</span></td>
+              <td>{u.coachProfile ? <span className={`badge-status ${u.coachProfile.isVerified ? 'confirmed' : 'pending'}`}>{u.coachProfile.isVerified ? 'verified' : 'unverified'}</span> : '—'}</td>
+              <td style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                {u.coachProfile && <button className="btn-outline" onClick={() => verify(u)}><ShieldCheck size={14} /> {u.coachProfile.isVerified ? 'Unverify' : 'Verify'}</button>}
+                <button className="btn-outline" disabled={u.role?.name === 'admin'} title={u.role?.name === 'admin' ? 'Admins cannot be suspended' : undefined} onClick={() => toggleActive(u)}>{u.isActive ? 'Suspend' : 'Reactivate'}</button>
+                <button className="btn-outline danger" disabled={u.role?.name === 'admin'} title={u.role?.name === 'admin' ? 'Admins cannot be deleted' : undefined} onClick={() => remove(u)}>Delete</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+  </div>;
+}
+
+function CategoriesPanel() {
+  const [categories, setCategories] = useState<SportCategory[]>([]);
+  const [name, setName] = useState('');
+  const [loading, setLoading] = useState(true);
+  const refresh = () => { setLoading(true); api.sportCategories().then((r) => setCategories(r.data)).finally(() => setLoading(false)); };
+  useEffect(refresh, []);
+
+  const add = async (e: React.FormEvent) => { e.preventDefault(); if (!name.trim()) return; await api.createSportCategory({ name }); setName(''); refresh(); };
+  const toggleActive = async (c: SportCategory) => { await api.updateSportCategory(c.id, { isActive: !c.isActive }); refresh(); };
+  const remove = async (c: SportCategory) => { if (!confirm(`Delete ${c.name}?`)) return; try { await api.deleteSportCategory(c.id); refresh(); } catch (e) { alert(e instanceof Error ? e.message : 'Could not delete category.'); } };
+
+  return <div className="dash-panel">
+    <form onSubmit={add} className="filter-bar">
+      <input placeholder="New sport category name…" value={name} onChange={(e) => setName(e.target.value)} />
+      <button className="button" type="submit">Add category</button>
+    </form>
+    {loading ? <Loading /> : (
+      <table className="data-table">
+        <thead><tr><th>Name</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {categories.map((c) => (
+            <tr key={c.id}>
+              <td>{c.name}</td>
+              <td><span className={`badge-status ${c.isActive ? 'confirmed' : 'cancelled'}`}>{c.isActive ? 'active' : 'inactive'}</span></td>
+              <td style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button className="btn-outline" onClick={() => toggleActive(c)}>{c.isActive ? 'Deactivate' : 'Activate'}</button>
+                <button className="btn-outline danger" onClick={() => remove(c)}>Delete</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+  </div>;
+}
+
+function CommissionsPanel() {
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [totalOwed, setTotalOwed] = useState(0);
+  const [onlyUnsettled, setOnlyUnsettled] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState('');
+
+  const refresh = () => {
+    setLoading(true);
+    api.adminGcashCommissions(onlyUnsettled ? { settled: false } : {})
+      .then((r) => { setPayments(r.data); setTotalOwed(r.meta?.totalOwed || 0); })
+      .finally(() => setLoading(false));
+  };
+  useEffect(refresh, [onlyUnsettled]);
+
+  const toggleSettled = async (p: Payment) => {
+    setBusyId(p.id);
+    try { await api.adminSettleGcashCommission(p.id, !p.platformFeeSettled); refresh(); }
+    finally { setBusyId(''); }
+  };
+
+  return <div className="dash-panel">
+    <div className="filter-bar" style={{ justifyContent: 'space-between' }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, width: 'auto', margin: 0 }}>
+        <input type="checkbox" style={{ width: 'auto', margin: 0 }} checked={onlyUnsettled} onChange={(e) => setOnlyUnsettled(e.target.checked)} /> Unsettled only
+      </label>
+      {!onlyUnsettled && <strong className="mono">₱{totalOwed.toLocaleString()} still owed</strong>}
+    </div>
+    {loading ? <Loading /> : payments.length === 0 ? <p className="muted">No GCash commissions to show.</p> : (
+      <table className="data-table">
+        <thead><tr><th>Coach</th><th>Client</th><th>Booking amount</th><th>Commission</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {payments.map((p) => (
+            <tr key={p.id}>
+              <td>{p.booking?.coach?.user?.name || '—'}</td>
+              <td>{p.booking?.client?.name || '—'}</td>
+              <td className="mono">₱{Number(p.amount).toLocaleString()}</td>
+              <td className="mono">₱{Number(p.platformFeeAmount || 0).toLocaleString()}</td>
+              <td><span className={`badge-status ${p.platformFeeSettled ? 'confirmed' : 'pending'}`}>{p.platformFeeSettled ? 'settled' : 'owed'}</span></td>
+              <td style={{ textAlign: 'right' }}>
+                <button className="btn-outline" disabled={busyId === p.id} onClick={() => toggleSettled(p)}>{p.platformFeeSettled ? 'Mark unsettled' : 'Mark settled'}</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+  </div>;
+}
+
+function PayoutsPanel() {
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [totalOwed, setTotalOwed] = useState(0);
+  const [onlyUnsettled, setOnlyUnsettled] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState('');
+
+  const refresh = () => {
+    setLoading(true);
+    api.adminGcashPayouts(onlyUnsettled ? { settled: false } : {})
+      .then((r) => { setPayments(r.data); setTotalOwed(r.meta?.totalOwed || 0); })
+      .finally(() => setLoading(false));
+  };
+  useEffect(refresh, [onlyUnsettled]);
+
+  const toggleSettled = async (p: Payment) => {
+    setBusyId(p.id);
+    try { await api.adminSettleGcashPayout(p.id, !p.payoutSettled); refresh(); }
+    finally { setBusyId(''); }
+  };
+
+  return <div className="dash-panel">
+    <p className="muted" style={{ fontSize: '.8rem', marginBottom: 14 }}>Coaches' net share of automatic (PayMongo) GCash payments the platform collected. Send it to the coach's GCash number below, then mark it settled.</p>
+    <div className="filter-bar" style={{ justifyContent: 'space-between' }}>
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, width: 'auto', margin: 0 }}>
+        <input type="checkbox" style={{ width: 'auto', margin: 0 }} checked={onlyUnsettled} onChange={(e) => setOnlyUnsettled(e.target.checked)} /> Unsettled only
+      </label>
+      {!onlyUnsettled && <strong className="mono">₱{totalOwed.toLocaleString()} still owed</strong>}
+    </div>
+    {loading ? <Loading /> : payments.length === 0 ? <p className="muted">No GCash payouts to show.</p> : (
+      <table className="data-table">
+        <thead><tr><th>Coach</th><th>Coach GCash</th><th>Client</th><th>Booking amount</th><th>Net payout</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {payments.map((p) => (
+            <tr key={p.id}>
+              <td>{p.booking?.coach?.user?.name || '—'}</td>
+              <td className="mono">{p.booking?.coach?.gcashNumber || 'not set'}</td>
+              <td>{p.booking?.client?.name || '—'}</td>
+              <td className="mono">₱{Number(p.amount).toLocaleString()}</td>
+              <td className="mono">₱{Number(p.payoutAmount || 0).toLocaleString()}</td>
+              <td><span className={`badge-status ${p.payoutSettled ? 'confirmed' : 'pending'}`}>{p.payoutSettled ? 'settled' : 'owed'}</span></td>
+              <td style={{ textAlign: 'right' }}>
+                <button className="btn-outline" disabled={busyId === p.id} onClick={() => toggleSettled(p)}>{p.payoutSettled ? 'Mark unsettled' : 'Mark settled'}</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    )}
+  </div>;
+}
+
+function SettingsPanel() {
+  const [form, setForm] = useState({ gcashNumber: '', gcashAccountName: '' });
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    api.profile()
+      .then((r) => setForm({ gcashNumber: r.data.gcashNumber || '', gcashAccountName: r.data.gcashAccountName || '' }))
+      .finally(() => setLoading(false));
+  }, []);
+
+  const save = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setMessage('');
+    try {
+      await api.updateProfile(form);
+      setMessage('Settings saved.');
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : 'Could not save changes.');
+    } finally { setBusy(false); }
+  };
+
+  if (loading) return <Loading />;
+
+  return <div className="dash-panel" style={{ maxWidth: 480 }}>
+    <p className="eyebrow" style={{ marginBottom: 6 }}>PLATFORM GCASH ACCOUNT</p>
+    <p className="muted" style={{ fontSize: '.8rem', marginBottom: 16 }}>Coaches see this number when they need to settle owed commission with the platform.</p>
+    <form onSubmit={save}>
+      <div className="mini-form">
+        <label>GCash number<input value={form.gcashNumber} onChange={(e) => setForm({ ...form, gcashNumber: e.target.value })} placeholder="e.g. 0917 000 0000" /></label>
+        <label>GCash account name<input value={form.gcashAccountName} onChange={(e) => setForm({ ...form, gcashAccountName: e.target.value })} placeholder="Name on the GCash account" /></label>
+      </div>
+      {message && <p className="form-message">{message}</p>}
+      <button className="button" type="submit" disabled={busy} style={{ marginTop: 16 }}>{busy ? 'Saving…' : 'Save changes'}</button>
+    </form>
+  </div>;
+}
+
+function ReviewsPanel() {
+  const [reviews, setReviews] = useState<Review[]>([]);
+  const [onlyFlagged, setOnlyFlagged] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const refresh = () => { setLoading(true); api.adminReviews(onlyFlagged ? { flagged: true } : {}).then((r) => setReviews(r.data)).finally(() => setLoading(false)); };
+  useEffect(refresh, [onlyFlagged]);
+
+  const setApproved = async (r: Review, isApproved: boolean) => { await api.moderateReview(r.id, { isApproved, isFlagged: false }); refresh(); };
+  const remove = async (r: Review) => { if (!confirm('Delete this review?')) return; await api.deleteReview(r.id); refresh(); };
+
+  return <div className="dash-panel">
+    <div className="filter-bar">
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, width: 'auto', margin: 0 }}>
+        <input type="checkbox" style={{ width: 'auto', margin: 0 }} checked={onlyFlagged} onChange={(e) => setOnlyFlagged(e.target.checked)} /> Flagged only
+      </label>
+    </div>
+    {loading ? <Loading /> : reviews.length === 0 ? <p className="muted">Nothing to moderate right now.</p> : (
+      <div>
+        {reviews.map((r) => (
+          <div key={r.id} className="list-card">
+            <div className="list-card-main">
+              <strong>{r.client?.name} → {r.coach?.user?.name}</strong>
+              <span>{'★'.repeat(r.rating)}{'☆'.repeat(5 - r.rating)} · {new Date(r.createdAt).toLocaleDateString()}</span>
+              {r.comment && <span>{r.comment}</span>}
+              {r.isFlagged && <span style={{ color: '#c94c41', display: 'flex', alignItems: 'center', gap: 5, marginTop: 4 }}><Flag size={13} /> Flagged{r.flagReason ? `: ${r.flagReason}` : ''}</span>}
+            </div>
+            <div className="list-card-actions">
+              <span className={`badge-status ${r.isApproved ? 'confirmed' : 'pending'}`}>{r.isApproved ? 'approved' : 'unapproved'}</span>
+              {!r.isApproved && <button className="btn-outline" onClick={() => setApproved(r, true)}>Approve</button>}
+              {r.isApproved && <button className="btn-outline" onClick={() => setApproved(r, false)}>Unapprove</button>}
+              <button className="btn-outline danger" onClick={() => remove(r)}>Delete</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>;
+}

@@ -1,0 +1,8 @@
+node_modules/
+.env
+uploads/coaches/*
+!uploads/coaches/.gitkeep
+npm-debug.log*
+coverage/
+*.log
+.DS_Store
