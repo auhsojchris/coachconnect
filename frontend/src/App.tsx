@@ -26,7 +26,8 @@ function App() {
   const auth = useSession();
   return <Routes>
     <Route element={<Layout session={auth.session} onLogout={() => auth.save(null)} />}>
-      <Route path="/" element={<Home />} />
+      <Route path="/" element={<AuthPage mode="login" onAuth={auth.save} />} />
+      <Route path="/explore" element={<Home />} />
       <Route path="/coaches" element={<CoachDirectory />} />
       <Route path="/coaches/:id" element={<CoachDetails session={auth.session} />} />
       <Route path="/about" element={<InfoPage title="Train with intention" copy="CoachConnect brings trusted coaches, flexible scheduling, and a little more humanity to every session." />} />
@@ -46,9 +47,9 @@ function Layout({ session, onLogout }: { session: Session | null; onLogout: () =
   useEffect(() => setOpen(false), [location.pathname]);
   const logout = () => { onLogout(); navigate('/'); };
   return <div className="site-shell">
-    <header className="topbar"><Link to="/" className="brand"><span className="brand-mark"><Dumbbell size={18} /></span> COACHCONNECT</Link>
+    <header className="topbar"><Link to="/explore" className="brand"><span className="brand-mark"><Dumbbell size={18} /></span> COACHCONNECT</Link>
       <button className="mobile-menu icon-btn" onClick={() => setOpen(!open)} aria-label="Toggle menu">{open ? <X /> : <Menu />}</button>
-      <nav className={open ? 'main-nav open' : 'main-nav'}><Link to="/coaches">Find a coach</Link><Link to="/about">How it works</Link><Link to="/contact">Contact</Link>
+      <nav className={open ? 'main-nav open' : 'main-nav'}><Link to="/explore">Home</Link><Link to="/coaches">Find a coach</Link><Link to="/about">How it works</Link><Link to="/contact">Contact</Link>
         {session ? <><Link className="nav-dashboard" to="/dashboard">Dashboard <ArrowRight size={15} /></Link><button className="text-btn" onClick={logout}>Log out</button></> : <><Link className="text-btn" to="/login">Log in</Link><Link className="button small" to="/register">Get started <ArrowRight size={15} /></Link></>}
       </nav>
     </header>
@@ -239,7 +240,7 @@ function CoachDetails({ session }: { session: Session | null }) {
 }
 
 function AuthPage({ mode, onAuth }: { mode: 'login' | 'register'; onAuth: (s: Session) => void }) { const isLogin = mode === 'login'; const [form, setForm] = useState({ name: '', email: '', password: '', role: 'client' as Role }); const [error, setError] = useState(''); const [busy, setBusy] = useState(false); const navigate = useNavigate(); const submit = async (e: React.FormEvent) => { e.preventDefault(); setBusy(true); setError(''); try { const result = isLogin ? await api.login({ email: form.email, password: form.password }) : await api.register(form); onAuth(result.data); navigate('/dashboard'); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to continue.'); } finally { setBusy(false); } };
-  return <section className="auth-page"><div className="auth-aside"><Link to="/" className="brand light-brand"><span className="brand-mark"><Dumbbell size={18} /></span> COACHCONNECT</Link><div><p className="eyebrow light">{isLogin ? 'WELCOME BACK' : 'YOUR NEXT CHAPTER'}</p><h1>{isLogin ? 'Good to see you.' : 'Make your move.'}</h1><p>{isLogin ? 'Your training plan is waiting.' : 'Find a coach who helps you go further.'}</p></div></div><div className="auth-form"><p className="eyebrow">{isLogin ? 'SIGN IN' : 'CREATE ACCOUNT'}</p><h2>{isLogin ? 'Welcome back' : 'Join CoachConnect'}</h2><form onSubmit={submit}>{!isLogin && <label>Your name<input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Alex Morgan" /></label>}<label>Email address<input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" /></label><label>Password<input required minLength={8} type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="8+ characters" /></label>{!isLogin && <label> I’m joining as<select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })}><option value="client">An athlete</option><option value="coach">A coach</option></select></label>}{error && <p className="error-text">{error}</p>}<button className="button full" disabled={busy}>{busy ? 'One moment...' : isLogin ? 'Log in' : 'Create account'} <ArrowRight size={16} /></button></form><p className="auth-switch">{isLogin ? 'New to CoachConnect?' : 'Already have an account?'} <Link to={isLogin ? '/register' : '/login'}>{isLogin ? 'Create an account' : 'Log in'}</Link></p></div></section>; }
+  return <section className="auth-page"><div className="auth-aside"><Link to="/explore" className="brand light-brand"><span className="brand-mark"><Dumbbell size={18} /></span> COACHCONNECT</Link><div><p className="eyebrow light">{isLogin ? 'WELCOME BACK' : 'YOUR NEXT CHAPTER'}</p><h1>{isLogin ? 'Good to see you.' : 'Make your move.'}</h1><p>{isLogin ? 'Your training plan is waiting.' : 'Find a coach who helps you go further.'}</p></div></div><div className="auth-form"><p className="eyebrow">{isLogin ? 'SIGN IN' : 'CREATE ACCOUNT'}</p><h2>{isLogin ? 'Welcome back' : 'Join CoachConnect'}</h2><form onSubmit={submit}>{!isLogin && <label>Your name<input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Alex Morgan" /></label>}<label>Email address<input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" /></label><label>Password<input required minLength={8} type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="8+ characters" /></label>{!isLogin && <label> I’m joining as<select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value as Role })}><option value="client">An athlete</option><option value="coach">A coach</option></select></label>}{error && <p className="error-text">{error}</p>}<button className="button full" disabled={busy}>{busy ? 'One moment...' : isLogin ? 'Log in' : 'Create account'} <ArrowRight size={16} /></button></form><p className="auth-switch">{isLogin ? 'New to CoachConnect?' : 'Already have an account?'} <Link to={isLogin ? '/register' : '/login'}>{isLogin ? 'Create an account' : 'Log in'}</Link></p></div></section>; }
 
 function Dashboard({ session, onLogout, onUserChange }: { session: Session; onLogout: () => void; onUserChange: (user: User) => void }) {
   const role = (session.user.role?.name || 'client') as Role;
@@ -258,7 +259,7 @@ function Dashboard({ session, onLogout, onUserChange }: { session: Session; onLo
   return <section className="dashboard">
     {mobile && <div className="sidebar-backdrop" onClick={() => setMobile(false)} />}
     <aside className={mobile ? 'sidebar mobile-open' : 'sidebar'}>
-      <div className="sidebar-top"><Link to="/" className="brand"><span className="brand-mark"><Dumbbell size={18} /></span> COACHCONNECT</Link><button className="icon-btn" onClick={() => setMobile(false)}><X /></button></div>
+      <div className="sidebar-top"><Link to="/explore" className="brand"><span className="brand-mark"><Dumbbell size={18} /></span> COACHCONNECT</Link><button className="icon-btn" onClick={() => setMobile(false)}><X /></button></div>
       <p className="side-label">WORKSPACE</p>
       <Link className={`side-link ${isActive('/dashboard') ? 'active' : ''}`} to="/dashboard"><CalendarDays size={17} /> Overview</Link>
       {role === 'client' && <Link className="side-link" to="/coaches"><Search size={17} /> Find a coach</Link>}
