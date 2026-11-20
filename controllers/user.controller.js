@@ -63,4 +63,24 @@ const uploadProfileImage = catchAsync(async (req, res) => {
   sendResponse(res, 200, 'Profile image uploaded', { profileImage: user.profileImage });
 });
 
-module.exports = { getProfile, updateProfile, uploadProfileImage };
+// POST /api/users/profile/gcash-qr — admin uploads the platform's payment QR
+const uploadGcashQr = catchAsync(async (req, res) => {
+  if (!req.file) throw ApiError.badRequest('No image file provided');
+  const user = await User.findByPk(req.user.id);
+  if (!user) throw ApiError.notFound('User not found');
+  user.gcashQrUrl = await uploadImage(req.file);
+  await user.save();
+  sendResponse(res, 200, 'Payment QR uploaded', { gcashQrUrl: user.gcashQrUrl });
+});
+
+// DELETE /api/users/profile/gcash-qr — admin removes it (checkout falls back
+// to the other payment options)
+const removeGcashQr = catchAsync(async (req, res) => {
+  const user = await User.findByPk(req.user.id);
+  if (!user) throw ApiError.notFound('User not found');
+  user.gcashQrUrl = null;
+  await user.save();
+  sendResponse(res, 200, 'Payment QR removed', { gcashQrUrl: null });
+});
+
+module.exports = { getProfile, updateProfile, uploadProfileImage, uploadGcashQr, removeGcashQr };

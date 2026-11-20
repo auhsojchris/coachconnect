@@ -6,11 +6,11 @@ export interface Achievement { title: string; year?: number | null; description?
 export interface SportCategory { id: string; name: string; description?: string; icon?: string; isActive?: boolean; }
 export interface Specialization { id?: string; sportCategoryId: string; certification?: string; yearsExperience?: number; sportCategory?: SportCategory; }
 export interface CoachProfile { id: string; userId?: string; bio?: string; experienceYears?: number; hourlyRate: number; location?: string; city?: string; country?: string; averageRating?: number; totalReviews?: number; isVerified?: boolean; gcashNumber?: string; gcashAccountName?: string; tagline?: string | null; skillLevels?: SkillLevel[] | null; achievements?: Achievement[] | null; specializations?: Specialization[]; }
-export interface User { id: string; name: string; email: string; phone?: string; role?: { name: Role }; profileImage?: string; coachProfile?: CoachProfile; clientProfile?: Record<string, unknown>; isActive?: boolean; emailVerified?: boolean; createdAt?: string; gcashNumber?: string; gcashAccountName?: string; }
+export interface User { id: string; name: string; email: string; phone?: string; role?: { name: Role }; profileImage?: string; coachProfile?: CoachProfile; clientProfile?: Record<string, unknown>; isActive?: boolean; emailVerified?: boolean; createdAt?: string; gcashNumber?: string; gcashAccountName?: string; gcashQrUrl?: string | null; }
 export interface Coach { id: string; hourlyRate: number; bio?: string; city?: string; location?: string; country?: string; experienceYears?: number; averageRating?: number; totalReviews?: number; isVerified?: boolean; gcashNumber?: string; gcashAccountName?: string; tagline?: string | null; skillLevels?: SkillLevel[] | null; achievements?: Achievement[] | null; user?: User; specializations?: Specialization[]; }
 export interface TimeSlot { id: string; date: string; startTime: string; endTime: string; status: string; }
 export interface Availability { id: string; coachId: string; isRecurring: boolean; dayOfWeek?: number | null; specificDate?: string | null; startTime: string; endTime: string; isActive?: boolean; }
-export interface Payment { id: string; status: string; amount: number; currency?: string; provider?: string; gcashReference?: string; paymongoPaymentIntentId?: string; paidAt?: string; receiptUrl?: string; platformFeeAmount?: number; platformFeeRate?: number; platformFeeSettled?: boolean; payoutAmount?: number; payoutSettled?: boolean; booking?: Booking; }
+export interface Payment { id: string; status: string; updatedAt?: string; amount: number; currency?: string; provider?: string; gcashReference?: string; paymongoPaymentIntentId?: string; paidAt?: string; receiptUrl?: string; platformFeeAmount?: number; platformFeeRate?: number; platformFeeSettled?: boolean; payoutAmount?: number; payoutSettled?: boolean; booking?: Booking; }
 export interface Booking { id: string; status: string; price: number; checkoutId?: string | null; notes?: string; coach?: Coach; client?: User; timeSlot?: TimeSlot; sportCategory?: SportCategory; payment?: Payment; cancellationReason?: string; createdAt?: string; }
 export interface Review { id: string; rating: number; comment?: string; isApproved?: boolean; isFlagged?: boolean; flagReason?: string; createdAt: string; client?: User; coach?: Coach; booking?: Booking; }
 export interface AppNotification { id: string; title: string; message: string; isRead: boolean; createdAt: string; }
@@ -49,6 +49,18 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
     throw new Error([body.message, details].filter(Boolean).join(': ') || 'Something went wrong.');
   }
   return body;
+}
+
+export interface QrCheckoutInfo { configured: boolean; amount: number; sessionCount: number; qrUrl: string | null; number: string; accountName: string; }
+
+async function uploadFile<T>(path: string, file: File): Promise<T> {
+  const token = getStoredToken();
+  const form = new FormData();
+  form.append('image', file);
+  const response = await fetch(`${API_URL}${path}`, { method: 'POST', body: form, headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.message || 'Upload failed.');
+  return body as T;
 }
 
 const qs = (params: Record<string, string | number | boolean | undefined>) => {
@@ -124,6 +136,13 @@ export const api = {
   submitGcashPayment: (target: PayTarget, referenceNumber: string) => request<{ data: Payment }>('/payments/gcash', { method: 'POST', body: JSON.stringify({ ...payTargetBody(target), referenceNumber }) }),
   confirmGcashPayment: (paymentId: string) => request<{ data: Payment }>(`/payments/${paymentId}/confirm-gcash`, { method: 'PUT' }),
   rejectGcashPayment: (paymentId: string) => request<{ data: Payment }>(`/payments/${paymentId}/reject-gcash`, { method: 'PUT' }),
+
+  // ---- Platform QR checkout ----
+  qrCheckout: (target: PayTarget) => request<{ data: QrCheckoutInfo }>(`/payments/qr-checkout/${Array.isArray(target) ? target[0] : target}${Array.isArray(target) ? `?bookingIds=${target.join(',')}` : ''}`),
+  submitQrPayment: (target: PayTarget, referenceNumber: string) => request<{ data: { payment: Payment; total: number; sessionCount: number } }>('/payments/qr', { method: 'POST', body: JSON.stringify({ ...payTargetBody(target), referenceNumber }) }),
+  uploadGcashQr: (file: File) => uploadFile<{ data: { gcashQrUrl: string } }>('/users/profile/gcash-qr', file),
+  removeGcashQr: () => request<{ data: { gcashQrUrl: null } }>('/users/profile/gcash-qr', { method: 'DELETE' }),
+  adminQrPayments: (status: 'submitted' | 'paid' | 'failed' | 'all' = 'submitted') => request<{ data: Payment[]; meta?: { total: number } }>(`/admin/qr-payments?status=${status}`),
 
   // ---- Saved payment methods ----
   createSetupIntent: () => request<{ data: { clientSecret: string } }>('/payments/methods/setup-intent', { method: 'POST' }),

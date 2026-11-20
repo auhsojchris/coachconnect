@@ -69,6 +69,30 @@ router.post(
   paymentController.submitGcashPayment
 );
 
+// Platform QR checkout (pay the admin's InstaPay/GCash QR, admin verifies).
+router.get(
+  '/qr-checkout/:bookingId',
+  [param('bookingId').isUUID().withMessage('Invalid booking id'), query('bookingIds').optional().custom(csvOfUuids)],
+  validate,
+  paymentController.getQrCheckout
+);
+router.post(
+  '/qr',
+  authorize('client', 'admin'),
+  [
+    ...checkoutTargetRules,
+    body('referenceNumber')
+      .trim()
+      .notEmpty()
+      .withMessage('Enter the reference number from your payment receipt')
+      .isLength({ max: 40 })
+      .matches(/^[A-Za-z0-9 -]+$/)
+      .withMessage('Reference numbers only contain letters, numbers, spaces and dashes'),
+  ],
+  validate,
+  paymentController.submitQrPayment
+);
+
 router.get('/:id', [param('id').isUUID().withMessage('Invalid payment id')], validate, paymentController.getPaymentById);
 router.put(
   '/:id/confirm-gcash',

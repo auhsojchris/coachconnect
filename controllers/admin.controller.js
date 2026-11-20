@@ -1,8 +1,12 @@
 const { Op } = require('sequelize');
-const { sequelize, User, Role, Coach, ClientProfile, Booking, Payment, Review } = require('../models');
+const { sequelize, User, Role, Coach, ClientProfile, Booking, Payment, Review, TimeSlot } = require('../models');
 const ApiError = require('../utils/ApiError');
 const catchAsync = require('../utils/catchAsync');
 const { sendResponse } = require('../utils/ApiResponse');
+
+// Payment providers where the client's money landed with the platform, so
+// the platform owes the coach their net share (payoutAmount).
+const PLATFORM_HELD = ['paymongo', 'platform_qr'];
 
 // GET /api/admin/users
 const listUsers = catchAsync(async (req, res) => {
@@ -131,7 +135,7 @@ const getDashboardStats = catchAsync(async (req, res) => {
     Review.count({ where: { isFlagged: true } }),
     Booking.findAll({ limit: 10, order: [['createdAt', 'DESC']] }),
     Payment.sum('platformFeeAmount', { where: { provider: 'gcash', status: 'paid', platformFeeSettled: false } }),
-    Payment.sum('payoutAmount', { where: { provider: 'paymongo', status: 'paid', payoutSettled: false } }),
+    Payment.sum('payoutAmount', { where: { provider: { [Op.in]: PLATFORM_HELD }, status: 'paid', payoutSettled: false } }),
     // All-time platform commission across both GCash paths (manual and
     // PayMongo), regardless of settlement status — the total the platform
     // has earned, not just what's still outstanding.
@@ -209,7 +213,7 @@ const settleGcashCommission = catchAsync(async (req, res) => {
 const listGcashPayouts = catchAsync(async (req, res) => {
   const { settled, page = 1, limit = 20 } = req.query;
 
-  const where = { provider: 'paymongo', status: 'paid', payoutAmount: { [Op.ne]: null } };
+  const where = { provider: { [Op.in]: PLATFORM_HELD }, status: 'paid', payoutAmount: { [Op.ne]: null } };
   if (settled !== undefined) where.payoutSettled = settled === 'true';
 
   const offset = (Number(page) - 1) * Number(limit);
@@ -252,7 +256,7 @@ const listGcashPayouts = catchAsync(async (req, res) => {
 const settleGcashPayout = catchAsync(async (req, res) => {
   const payment = await Payment.findByPk(req.params.paymentId);
   if (!payment) throw ApiError.notFound('Payment not found');
-  if (payment.provider !== 'paymongo' || payment.payoutAmount === null) {
+  if (!PLATFORM_HELD.includes(payment.provider) || payment.payoutAmount === null) {
     throw ApiError.badRequest('This payment has no coach payout to settle');
   }
   payment.payoutSettled = req.body.settled !== undefined ? req.body.settled : true;
@@ -288,7 +292,45 @@ const listReviews = catchAsync(async (req, res) => {
   });
 });
 
+// GET /api/admin/qr-payments?status=submitted — client payments to the
+// platform's QR, newest first. Confirm/reject go through the existing
+// PUT /api/payments/:id/confirm-gcash and /reject-gcash endpoints, which
+// resolve every session in the same checkout at once.
+const listQrPayments = catchAsync(async (req, res) => {
+  const { status = 'submitted', page = 1, limit = 50 } = req.query;
+  const where = { provider: 'platform_qr' };
+  if (status !== 'all') where.status = status;
+
+  const offset = (Number(page) - 1) * Number(limit);
+  const { count, rows } = await Payment.findAndCountAll({
+    where,
+    include: [
+      {
+        model: Booking,
+        as: 'booking',
+        include: [
+          { model: User, as: 'client', attributes: ['id', 'name', 'email'] },
+          { model: Coach, as: 'coach', attributes: ['id'], include: [{ model: User, as: 'user', attributes: ['id', 'name'] }] },
+          { model: TimeSlot, as: 'timeSlot', attributes: ['id', 'date', 'startTime', 'endTime'] },
+        ],
+      },
+    ],
+    limit: Number(limit),
+    offset,
+    distinct: true,
+    order: [['updatedAt', 'DESC']],
+  });
+
+  sendResponse(res, 200, 'QR payments retrieved', rows, {
+    total: count,
+    page: Number(page),
+    limit: Number(limit),
+    totalPages: Math.ceil(count / Number(limit)),
+  });
+});
+
 module.exports = {
+  listQrPayments,
   listUsers,
   getUserById,
   createUser,

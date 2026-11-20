@@ -2,7 +2,7 @@ process.env.NODE_ENV = 'test';
 
 const request = require('supertest');
 const app = require('../app');
-const { Role, Coach, SportCategory, TimeSlot, Booking, Payment } = require('../models');
+const { Role, User, Coach, SportCategory, TimeSlot, Booking, Payment, Notification } = require('../models');
 require('./setup');
 
 describe('Multi-session checkout', () => {
@@ -210,5 +210,95 @@ describe('Paying for separately-booked sessions together', () => {
     expect(res2.status).toBe(400);
     const res3 = await request(app).get(`/api/payments/gcash-info/${mine.id}?bookingIds=nope`).set(auth(clientToken));
     expect(res3.status).toBe(400);
+  });
+});
+
+describe('Platform QR checkout', () => {
+  let clientToken;
+  let coachToken;
+  let adminToken;
+  let admin;
+  let coach;
+  let sport;
+  const auth = (token) => ({ Authorization: `Bearer ${token}` });
+  const register = (name, email, role) =>
+    request(app).post('/api/auth/register').send({ name, email, password: 'Password1', role });
+  const bookOne = async (date) => {
+    const slot = await TimeSlot.create({ coachId: coach.id, date, startTime: '07:00', endTime: '08:00', status: 'available' });
+    const res = await request(app).post('/api/bookings').set(auth(clientToken)).send({ coachId: coach.id, timeSlotId: slot.id, sportCategoryId: sport.id });
+    expect(res.status).toBe(201);
+    return res.body.data;
+  };
+
+  beforeAll(async () => {
+    const adminRole = await Role.findOne({ where: { name: 'admin' } });
+    admin = await User.create({ name: 'Platform Admin', email: 'admin-qr@test.com', password: 'Password1', roleId: adminRole.id });
+    adminToken = (await request(app).post('/api/auth/login').send({ email: 'admin-qr@test.com', password: 'Password1' })).body.data.token;
+
+    const c = await register('Coach QR', 'coach-qr@test.com', 'coach');
+    coachToken = c.body.data.token;
+    coach = await Coach.findOne({ where: { userId: c.body.data.user.id } });
+    await coach.update({ hourlyRate: 500 });
+    sport = await SportCategory.create({ name: 'Tennis QR' });
+    clientToken = (await register('Client QR', 'client-qr@test.com', 'client')).body.data.token;
+  });
+
+  it('reports not configured until an admin has a QR, then returns where and how much to pay', async () => {
+    const b1 = await bookOne('2099-06-01');
+    const b2 = await bookOne('2099-06-02');
+    const before = await request(app).get(`/api/payments/qr-checkout/${b1.id}?bookingIds=${b1.id},${b2.id}`).set(auth(clientToken));
+    expect(before.status).toBe(200);
+    expect(before.body.data.configured).toBe(false);
+
+    await admin.update({ gcashQrUrl: 'https://example.com/qr.png', gcashNumber: '09050000000', gcashAccountName: 'Platform' });
+    const after = await request(app).get(`/api/payments/qr-checkout/${b1.id}?bookingIds=${b1.id},${b2.id}`).set(auth(clientToken));
+    expect(after.body.data).toMatchObject({ configured: true, amount: 1000, sessionCount: 2, qrUrl: 'https://example.com/qr.png', accountName: 'Platform' });
+  });
+
+  it('records a submitted QR payment for every session and alerts the admin; only an admin can confirm it', async () => {
+    const b1 = await bookOne('2099-07-01');
+    const b2 = await bookOne('2099-07-02');
+    const submit = await request(app).post('/api/payments/qr').set(auth(clientToken)).send({ bookingIds: [b1.id, b2.id], referenceNumber: '1234 567 890' });
+    expect(submit.status).toBe(201);
+    expect(submit.body.data.total).toBe(1000);
+
+    const payments = await Payment.findAll({ where: { bookingId: [b1.id, b2.id] } });
+    expect(payments).toHaveLength(2);
+    expect(payments.every((p) => p.provider === 'platform_qr' && p.status === 'submitted' && Number(p.payoutAmount) === 450 && p.currency === 'php')).toBe(true);
+    expect(await Notification.count({ where: { userId: admin.id, type: 'payment_submitted' } })).toBe(1);
+
+    const list = await request(app).get('/api/admin/qr-payments').set(auth(adminToken));
+    expect(list.status).toBe(200);
+    expect(list.body.data.filter((p) => [b1.id, b2.id].includes(p.bookingId))).toHaveLength(2);
+
+    const coachTry = await request(app).put(`/api/payments/${payments[0].id}/confirm-gcash`).set(auth(coachToken));
+    expect(coachTry.status).toBe(403);
+
+    const confirm = await request(app).put(`/api/payments/${payments[0].id}/confirm-gcash`).set(auth(adminToken));
+    expect(confirm.status).toBe(200);
+    const after = await Booking.findAll({ where: { id: [b1.id, b2.id] }, include: [{ model: Payment, as: 'payment' }] });
+    expect(after.every((b) => b.status === 'confirmed' && b.payment.status === 'paid' && b.payment.payoutSettled === false)).toBe(true);
+    expect(await Notification.count({ where: { userId: coach.userId, type: 'payout_pending' } })).toBe(1);
+
+    const payouts = await request(app).get('/api/admin/gcash-payouts?settled=false').set(auth(adminToken));
+    expect(payouts.body.data.some((p) => p.bookingId === b1.id)).toBe(true);
+  });
+
+  it('rejects a reference number already used for another payment', async () => {
+    const b = await bookOne('2099-08-01');
+    const res = await request(app).post('/api/payments/qr').set(auth(clientToken)).send({ bookingIds: [b.id], referenceNumber: '1234 567 890' });
+    expect(res.status).toBe(409);
+    expect(await Payment.count({ where: { bookingId: b.id } })).toBe(0);
+  });
+
+  it('rejecting puts every session back to payable', async () => {
+    const b1 = await bookOne('2099-09-01');
+    const b2 = await bookOne('2099-09-02');
+    await request(app).post('/api/payments/qr').set(auth(clientToken)).send({ bookingIds: [b1.id, b2.id], referenceNumber: 'BAD-REF-1' });
+    const p = await Payment.findOne({ where: { bookingId: b1.id } });
+    const res = await request(app).put(`/api/payments/${p.id}/reject-gcash`).set(auth(adminToken));
+    expect(res.status).toBe(200);
+    const after = await Booking.findAll({ where: { id: [b1.id, b2.id] }, include: [{ model: Payment, as: 'payment' }] });
+    expect(after.every((b) => b.status === 'pending' && b.payment.status === 'failed')).toBe(true);
   });
 });

@@ -1,5 +1,5 @@
 const express = require('express');
-const { param, body } = require('express-validator');
+const { param, body, query } = require('express-validator');
 const adminController = require('../controllers/admin.controller');
 const authenticate = require('../middleware/auth.middleware');
 const authorize = require('../middleware/role.middleware');
@@ -47,6 +47,13 @@ router.put(
   [param('paymentId').isUUID(), body('settled').optional().isBoolean()],
   validate,
   adminController.settleGcashCommission
+);
+
+router.get(
+  '/qr-payments',
+  [query('status').optional().isIn(['submitted', 'paid', 'failed', 'all'])],
+  validate,
+  adminController.listQrPayments
 );
 
 router.get('/gcash-payouts', adminController.listGcashPayouts);

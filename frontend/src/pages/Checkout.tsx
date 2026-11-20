@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Elements, PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 import { stripePromise } from '../services/stripe';
-import { api, PayTarget, payTargetKey } from '../services/api';
+import { api, PayTarget, payTargetKey, QrCheckoutInfo } from '../services/api';
 
 function PayForm({ onDone }: { onDone: () => void }) {
   const stripe = useStripe();
@@ -152,7 +152,94 @@ function GcashCheckout({ bookingId, amount, onDone }: { bookingId: PayTarget; am
     : <>{info.sessionCount > 1 && <SessionCountNote count={info.sessionCount} />}<ManualGcashCheckout bookingId={bookingId} price={price} feeRate={info.platformFeeRate} number={info.number} accountName={info.accountName} onDone={onDone} /></>;
 }
 
+/** Saves the QR image so it can be uploaded from the gallery in GCash/a bank app (you can't scan your own screen). */
+async function saveImage(url: string) {
+  try {
+    const blob = await (await fetch(url)).blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = 'coachconnect-payment-qr.png';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+  } catch {
+    window.open(url, '_blank', 'noopener');
+  }
+}
+
+function QrCheckout({ bookingId, info, onDone }: { bookingId: PayTarget; info: QrCheckoutInfo; onDone: () => void }) {
+  const [reference, setReference] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const amount = Number(info.amount);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await api.submitQrPayment(bookingId, reference.trim());
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not submit your payment.');
+    } finally { setBusy(false); }
+  };
+
+  return <form onSubmit={submit}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12, marginBottom: 14 }}>
+      <p className="eyebrow">SCAN TO PAY</p>
+      <div style={{ textAlign: 'right' }}>
+        <div className="mono" style={{ fontSize: '1.5rem', fontWeight: 700 }}>₱{amount.toLocaleString()}</div>
+        <small className="muted">{info.sessionCount > 1 ? `for ${info.sessionCount} sessions` : 'for 1 session'}</small>
+      </div>
+    </div>
+
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 20, alignItems: 'flex-start' }}>
+      <div style={{ flex: '0 0 auto', margin: '0 auto', textAlign: 'center' }}>
+        <img src={info.qrUrl!} alt="Platform payment QR code" style={{ width: 220, maxWidth: '100%', borderRadius: 10, border: '1px solid var(--line)', background: '#fff' }} />
+        {info.accountName && <p style={{ fontWeight: 700, marginTop: 8 }}>{info.accountName}</p>}
+        {info.number && <p className="muted mono" style={{ fontSize: '.8rem' }}>{info.number}</p>}
+        <button type="button" className="btn-outline" style={{ marginTop: 8 }} onClick={() => saveImage(info.qrUrl!)}>Save QR image</button>
+      </div>
+
+      <div style={{ flex: '1 1 240px' }}>
+        <ol style={{ paddingLeft: 18, margin: '0 0 14px', fontSize: '.84rem', lineHeight: 1.7 }}>
+          <li>Open GCash, Maya or your bank app and choose <strong>Scan QR</strong> (InstaPay). On your phone? Tap <em>Save QR image</em> and upload it from your gallery.</li>
+          <li>Pay exactly <strong className="mono">₱{amount.toLocaleString()}</strong>.</li>
+          <li>Copy the <strong>reference number</strong> from your receipt and enter it below.</li>
+        </ol>
+        <label>Reference number
+          <input required maxLength={40} value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. 1234 567 890123" inputMode="text" autoComplete="off" />
+        </label>
+        {error && <p className="error-text">{error}</p>}
+        <button className="button full" type="submit" disabled={busy || !reference.trim()} style={{ marginTop: 6 }}>{busy ? 'Submitting…' : 'I’ve paid — submit reference'}</button>
+        <p className="muted" style={{ fontSize: '.72rem', marginTop: 10 }}>The platform checks the payment arrived, then confirms your {info.sessionCount > 1 ? 'sessions' : 'session'}. You’ll get a notification and a receipt by email.</p>
+      </div>
+    </div>
+  </form>;
+}
+
 export default function Checkout({ bookingId, amount, onDone, onCancel }: { bookingId: PayTarget; amount?: number; onDone: () => void; onCancel: () => void }) {
+  const [qr, setQr] = useState<QrCheckoutInfo | null>(null);
+  const [qrError, setQrError] = useState('');
+
+  useEffect(() => {
+    api.qrCheckout(bookingId)
+      .then((r) => setQr(r.data))
+      .catch((e) => setQrError(e instanceof Error ? e.message : 'Could not load checkout.'));
+  }, [payTargetKey(bookingId)]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const cancel = <button className="text-btn" onClick={onCancel} style={{ marginTop: 10, padding: 0 }}>Cancel</button>;
+
+  if (qrError) return <div className="checkout-box"><p className="error-text">{qrError}</p>{cancel}</div>;
+  if (!qr) return <div className="checkout-box"><p className="form-message">Preparing checkout…</p></div>;
+  // The platform's QR is the checkout whenever an admin has set one up.
+  if (qr.configured && qr.qrUrl) return <div className="checkout-box"><QrCheckout bookingId={bookingId} info={qr} onDone={onDone} />{cancel}</div>;
+
+  return <LegacyCheckout bookingId={bookingId} amount={amount} onDone={onDone} onCancel={onCancel} />;
+}
+
+/** Card / GCash tabs — only used until an admin uploads the platform QR. */
+function LegacyCheckout({ bookingId, amount, onDone, onCancel }: { bookingId: PayTarget; amount?: number; onDone: () => void; onCancel: () => void }) {
   const [method, setMethod] = useState<'card' | 'gcash'>('card');
 
   return <div className="checkout-box">

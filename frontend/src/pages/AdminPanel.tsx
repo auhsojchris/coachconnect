@@ -3,18 +3,19 @@ import { CircleUserRound, Dumbbell, Flag, Percent, ShieldCheck, Users } from 'lu
 import { api, DashboardStats, Payment, Review, Role, SportCategory, User } from '../services/api';
 import { Loading, Stat } from '../components/shared';
 
-type Tab = 'overview' | 'users' | 'categories' | 'reviews' | 'commissions' | 'payouts' | 'settings';
+type Tab = 'overview' | 'payments' | 'users' | 'categories' | 'reviews' | 'commissions' | 'payouts' | 'settings';
 
 export default function AdminPanel() {
   const [tab, setTab] = useState<Tab>('overview');
   return <div className="content-page">
     <div className="dash-header"><div><p className="eyebrow">ADMIN COMMAND CENTER</p><h1>System overview</h1><p className="muted">A clear view of what is moving through CoachConnect.</p></div></div>
     <div className="tab-strip">
-      {(['overview', 'users', 'categories', 'reviews', 'commissions', 'payouts', 'settings'] as Tab[]).map((t) => (
+      {(['overview', 'payments', 'users', 'categories', 'reviews', 'commissions', 'payouts', 'settings'] as Tab[]).map((t) => (
         <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{t[0].toUpperCase() + t.slice(1)}</button>
       ))}
     </div>
     {tab === 'overview' && <Overview />}
+    {tab === 'payments' && <QrPaymentsPanel />}
     {tab === 'users' && <UsersPanel />}
     {tab === 'categories' && <CategoriesPanel />}
     {tab === 'reviews' && <ReviewsPanel />}
@@ -43,7 +44,7 @@ function Overview() {
     )}
     {stats.gcashPayoutOwed > 0 && (
       <p className="muted" style={{ marginBottom: 24 }}>
-        <strong style={{ color: 'var(--turf-dark)' }}>₱{stats.gcashPayoutOwed.toLocaleString()}</strong> owed to coaches from automatic GCash payments — see the Payouts tab.
+        <strong style={{ color: 'var(--turf-dark)' }}>₱{stats.gcashPayoutOwed.toLocaleString()}</strong> owed to coaches from payments the platform collected — see the Payouts tab.
       </p>
     )}
     <div className="dash-columns">
@@ -60,6 +61,83 @@ function Overview() {
       </section>
     </div>
   </>;
+}
+
+/** One client checkout paid with one QR transfer: all its sessions resolve together. */
+type QrGroup = { key: string; payments: Payment[]; total: number };
+
+function QrPaymentsPanel() {
+  const [status, setStatus] = useState<'submitted' | 'paid' | 'failed' | 'all'>('submitted');
+  const [payments, setPayments] = useState<Payment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyKey, setBusyKey] = useState('');
+  const [message, setMessage] = useState('');
+
+  const refresh = () => {
+    setLoading(true);
+    api.adminQrPayments(status).then((r) => setPayments(r.data || [])).catch((e) => setMessage(e instanceof Error ? e.message : 'Could not load payments.')).finally(() => setLoading(false));
+  };
+  useEffect(refresh, [status]);
+
+  const groups = Object.values(payments.reduce<Record<string, QrGroup>>((acc, p) => {
+    const key = `${p.booking?.checkoutId || p.id}:${p.gcashReference}:${p.status}`;
+    acc[key] ||= { key, payments: [], total: 0 };
+    acc[key].payments.push(p);
+    acc[key].total = Math.round((acc[key].total + Number(p.amount)) * 100) / 100;
+    return acc;
+  }, {}));
+
+  const resolve = async (group: QrGroup, action: 'confirm' | 'reject') => {
+    const verb = action === 'confirm' ? 'Confirm' : 'Reject';
+    if (!confirm(`${verb} ₱${group.total.toLocaleString()} (ref ${group.payments[0].gcashReference}) for ${group.payments.length} session(s)?${action === 'confirm' ? ' Only do this once you see the money in the account.' : ''}`)) return;
+    setBusyKey(group.key);
+    setMessage('');
+    try {
+      const id = group.payments[0].id;
+      await (action === 'confirm' ? api.confirmGcashPayment(id) : api.rejectGcashPayment(id));
+      setMessage(action === 'confirm' ? 'Payment confirmed — the sessions are booked and the coach payout is queued.' : 'Payment rejected — the client has been notified.');
+      refresh();
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'That didn’t go through.');
+    } finally { setBusyKey(''); }
+  };
+
+  return <div className="dash-panel">
+    <p className="muted" style={{ fontSize: '.8rem', marginBottom: 14 }}>Payments clients sent to the platform QR. Check each reference number in your GCash/bank history, then confirm it — that books every session in the checkout and queues the coach’s payout.</p>
+    <div className="filter-bar">
+      <select value={status} onChange={(e) => setStatus(e.target.value as typeof status)}>
+        <option value="submitted">To verify</option>
+        <option value="paid">Confirmed</option>
+        <option value="failed">Rejected</option>
+        <option value="all">All</option>
+      </select>
+    </div>
+    {message && <p className="form-message">{message}</p>}
+    {loading ? <Loading /> : groups.length === 0 ? <p className="muted">{status === 'submitted' ? 'Nothing waiting for verification.' : 'No payments to show.'}</p> : (
+      <table className="data-table">
+        <thead><tr><th>Submitted</th><th>Client</th><th>Coach</th><th>Sessions</th><th>Reference</th><th>Amount</th><th></th></tr></thead>
+        <tbody>
+          {groups.map((g) => {
+            const first = g.payments[0];
+            return <tr key={g.key}>
+              <td className="muted" style={{ whiteSpace: 'nowrap' }}>{first.updatedAt ? new Date(first.updatedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—'}</td>
+              <td><strong>{first.booking?.client?.name || '—'}</strong><br /><span className="muted">{first.booking?.client?.email}</span></td>
+              <td>{first.booking?.coach?.user?.name || '—'}</td>
+              <td style={{ fontSize: '.8rem' }}>{g.payments.map((p) => <div key={p.id}>{p.booking?.timeSlot ? `${p.booking.timeSlot.date} ${p.booking.timeSlot.startTime.slice(0, 5)}` : '—'}</div>)}</td>
+              <td className="mono">{first.gcashReference}</td>
+              <td className="mono"><strong>₱{g.total.toLocaleString()}</strong></td>
+              <td style={{ textAlign: 'right' }}>
+                {first.status === 'submitted' ? <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                  <button className="btn-outline" disabled={busyKey === g.key} onClick={() => resolve(g, 'confirm')}>Confirm</button>
+                  <button className="btn-outline danger" disabled={busyKey === g.key} onClick={() => resolve(g, 'reject')}>Reject</button>
+                </div> : <span className={`badge-status ${first.status === 'paid' ? 'confirmed' : 'cancelled'}`}>{first.status === 'paid' ? 'confirmed' : 'rejected'}</span>}
+              </td>
+            </tr>;
+          })}
+        </tbody>
+      </table>
+    )}
+  </div>;
 }
 
 function UsersPanel() {
@@ -232,7 +310,7 @@ function PayoutsPanel() {
   };
 
   return <div className="dash-panel">
-    <p className="muted" style={{ fontSize: '.8rem', marginBottom: 14 }}>Coaches' net share of automatic (PayMongo) GCash payments the platform collected. Send it to the coach's GCash number below, then mark it settled.</p>
+    <p className="muted" style={{ fontSize: '.8rem', marginBottom: 14 }}>Coaches' net share of payments the platform collected (QR and PayMongo). Send it to the coach's GCash number below, then mark it settled.</p>
     <div className="filter-bar" style={{ justifyContent: 'space-between' }}>
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, width: 'auto', margin: 0 }}>
         <input type="checkbox" style={{ width: 'auto', margin: 0 }} checked={onlyUnsettled} onChange={(e) => setOnlyUnsettled(e.target.checked)} /> Unsettled only
@@ -264,15 +342,39 @@ function PayoutsPanel() {
 
 function SettingsPanel() {
   const [form, setForm] = useState({ gcashNumber: '', gcashAccountName: '' });
+  const [qrUrl, setQrUrl] = useState<string | null>(null);
+  const [qrBusy, setQrBusy] = useState(false);
+  const [qrMessage, setQrMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
 
   useEffect(() => {
     api.profile()
-      .then((r) => setForm({ gcashNumber: r.data.gcashNumber || '', gcashAccountName: r.data.gcashAccountName || '' }))
+      .then((r) => { setForm({ gcashNumber: r.data.gcashNumber || '', gcashAccountName: r.data.gcashAccountName || '' }); setQrUrl(r.data.gcashQrUrl || null); })
       .finally(() => setLoading(false));
   }, []);
+
+  const uploadQr = async (file: File | undefined) => {
+    if (!file) return;
+    setQrBusy(true);
+    setQrMessage('');
+    try {
+      const r = await api.uploadGcashQr(file);
+      setQrUrl(r.data.gcashQrUrl);
+      setQrMessage('QR uploaded — clients now pay by scanning it at checkout.');
+    } catch (err) {
+      setQrMessage(err instanceof Error ? err.message : 'Could not upload the QR.');
+    } finally { setQrBusy(false); }
+  };
+
+  const removeQr = async () => {
+    if (!confirm('Remove the payment QR? Checkout will fall back to the card/GCash options.')) return;
+    setQrBusy(true);
+    try { await api.removeGcashQr(); setQrUrl(null); setQrMessage('QR removed.'); }
+    catch (err) { setQrMessage(err instanceof Error ? err.message : 'Could not remove the QR.'); }
+    finally { setQrBusy(false); }
+  };
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -288,9 +390,25 @@ function SettingsPanel() {
 
   if (loading) return <Loading />;
 
-  return <div className="dash-panel" style={{ maxWidth: 480 }}>
+  return <div className="dash-panel" style={{ maxWidth: 520 }}>
+    <p className="eyebrow" style={{ marginBottom: 6 }}>CHECKOUT PAYMENT QR</p>
+    <p className="muted" style={{ fontSize: '.8rem', marginBottom: 14 }}>Upload your GCash/InstaPay QR (GCash → Profile → My QR → Download). Clients scan it to pay at checkout, then you verify their reference number in the Payments tab.</p>
+    <div style={{ display: 'flex', gap: 18, alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 24 }}>
+      {qrUrl
+        ? <img src={qrUrl} alt="Current payment QR" style={{ width: 160, borderRadius: 8, border: '1px solid var(--line)', background: '#fff' }} />
+        : <div className="muted" style={{ width: 160, height: 160, border: '1.5px dashed var(--line)', borderRadius: 8, display: 'grid', placeItems: 'center', fontSize: '.75rem', textAlign: 'center', padding: 10 }}>No QR yet — checkout uses card/GCash tabs</div>}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <label className="btn-outline" style={{ cursor: qrBusy ? 'wait' : 'pointer', width: 'auto', margin: 0 }}>
+          {qrBusy ? 'Uploading…' : qrUrl ? 'Replace QR image' : 'Upload QR image'}
+          <input type="file" accept="image/png,image/jpeg,image/webp" disabled={qrBusy} style={{ display: 'none' }} onChange={(e) => { uploadQr(e.target.files?.[0]); e.target.value = ''; }} />
+        </label>
+        {qrUrl && <button type="button" className="btn-outline danger" disabled={qrBusy} onClick={removeQr}>Remove QR</button>}
+      </div>
+    </div>
+    {qrMessage && <p className="form-message" style={{ marginTop: -12, marginBottom: 20 }}>{qrMessage}</p>}
+
     <p className="eyebrow" style={{ marginBottom: 6 }}>PLATFORM GCASH ACCOUNT</p>
-    <p className="muted" style={{ fontSize: '.8rem', marginBottom: 16 }}>Coaches see this number when they need to settle owed commission with the platform.</p>
+    <p className="muted" style={{ fontSize: '.8rem', marginBottom: 16 }}>Shown under the QR at checkout, and to coaches settling owed commission.</p>
     <form onSubmit={save}>
       <div className="mini-form">
         <label>GCash number<input value={form.gcashNumber} onChange={(e) => setForm({ ...form, gcashNumber: e.target.value })} placeholder="e.g. 0917 000 0000" /></label>

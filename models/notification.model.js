@@ -13,7 +13,10 @@ module.exports = (sequelize, DataTypes) => {
           'payment_failed',
           'session_reminder',
           'review_received',
-          'general'
+          'general',
+          'gcash_submitted',
+          'payout_pending',
+          'payment_submitted'
         ),
         allowNull: false,
       },

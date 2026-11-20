@@ -267,6 +267,85 @@ const getPlatformGcashAccount = catchAsync(async (req, res) => {
   sendResponse(res, 200, 'Platform GCash account retrieved', { number: admin.gcashNumber, accountName: admin.gcashAccountName || '' });
 });
 
+// ---- Platform QR checkout ----------------------------------------------
+// The client scans the admin's InstaPay/GCash QR, pays the platform the
+// checkout total, and submits the reference number. An admin verifies it.
+// The platform then holds the money, so (like PayMongo) each session's
+// payoutAmount is what the platform owes the coach.
+const PLATFORM_QR = 'platform_qr';
+
+async function findPlatformQrAccount() {
+  return User.findOne({
+    where: { gcashQrUrl: { [Op.ne]: null } },
+    include: [{ model: Role, as: 'role', where: { name: 'admin' } }],
+    attributes: ['id', 'gcashQrUrl', 'gcashNumber', 'gcashAccountName'],
+    order: [['createdAt', 'ASC']],
+  });
+}
+
+// GET /api/payments/qr-checkout/:bookingId(?bookingIds=a,b) — what to pay and
+// where. `configured: false` (not an error) when no admin has uploaded a QR,
+// so the client can fall back to the other payment options.
+const getQrCheckout = catchAsync(async (req, res) => {
+  const checkout = await loadCheckout(req, { ...checkoutTarget(req.query), bookingId: req.params.bookingId });
+  const account = await findPlatformQrAccount();
+  sendResponse(res, 200, 'QR checkout retrieved', {
+    configured: !!account,
+    amount: checkout.total,
+    sessionCount: checkout.bookings.length,
+    qrUrl: account?.gcashQrUrl || null,
+    number: account?.gcashNumber || '',
+    accountName: account?.gcashAccountName || '',
+  });
+});
+
+// POST /api/payments/qr — client reports they paid the platform's QR.
+const submitQrPayment = catchAsync(async (req, res) => {
+  const referenceNumber = String(req.body.referenceNumber).trim();
+  if (!(await findPlatformQrAccount())) throw ApiError.badRequest('QR payments are not set up yet');
+
+  // A reference already used for a different payment is almost certainly a
+  // mistake (or a reused receipt) — catch it before an admin has to.
+  const reused = await Payment.findOne({
+    where: { provider: PLATFORM_QR, gcashReference: referenceNumber, status: { [Op.in]: ['submitted', 'paid'] } },
+    include: [{ model: Booking, as: 'booking', attributes: ['id', 'clientId'] }],
+  });
+
+  const checkout = await loadCheckout(req, checkoutTarget(req.body), { claim: true });
+  const ownIds = new Set(checkout.bookings.map((b) => b.id));
+  if (reused && !ownIds.has(reused.bookingId)) {
+    throw ApiError.conflict('This reference number was already used for another payment. Please check it and try again.');
+  }
+
+  const payments = await upsertCheckoutPayments(checkout, (b) => ({
+    provider: PLATFORM_QR,
+    status: 'submitted',
+    gcashReference: referenceNumber,
+    currency: 'php',
+    platformFeeRate: PLATFORM_FEE_RATE,
+    ...splitFee(b.price),
+    platformFeeSettled: false,
+    payoutSettled: false,
+  }));
+
+  const admins = await User.findAll({ include: [{ model: Role, as: 'role', where: { name: 'admin' } }], attributes: ['id'] });
+  for (const admin of admins) {
+    await notificationService.createNotification({
+      userId: admin.id,
+      type: 'payment_submitted',
+      title: 'QR payment to verify',
+      message: `A client paid ₱${checkout.total.toLocaleString()} for ${payments.length} session(s) (ref: ${referenceNumber}). Check it arrived, then confirm it in Admin → Payments.`,
+      metadata: { paymentId: payments[0].id, bookingId: payments[0].bookingId },
+    });
+  }
+
+  sendResponse(res, 201, 'Payment submitted — the platform will confirm it shortly', {
+    payment: payments[0],
+    total: checkout.total,
+    sessionCount: payments.length,
+  });
+});
+
 // POST /api/payments/gcash — client reports a GCash payment sent directly to
 // the coach's own number. The platform's cut is recorded as a commission the
 // coach owes (visible to admin), not deducted from what the client sends.
@@ -299,11 +378,12 @@ const submitGcashPayment = catchAsync(async (req, res) => {
 async function loadOwnedGcashPayments(req) {
   const payment = await Payment.findByPk(req.params.id, { include: paymentInclude });
   if (!payment) throw ApiError.notFound('Payment not found');
-  if (payment.provider !== 'gcash') throw ApiError.badRequest('This payment was not made via GCash');
+  if (payment.provider !== 'gcash' && payment.provider !== PLATFORM_QR) throw ApiError.badRequest('This payment was not made via GCash');
   if (payment.status !== 'submitted') throw ApiError.conflict('This payment has already been resolved');
 
   let allowed = req.user.role.name === 'admin';
-  if (!allowed && req.user.role.name === 'coach') {
+  // The platform received QR payments, so only an admin can verify them.
+  if (!allowed && req.user.role.name === 'coach' && payment.provider === 'gcash') {
     const coach = await Coach.findOne({ where: { userId: req.user.id } });
     allowed = !!coach && payment.booking.coachId === coach.id;
   }
@@ -311,7 +391,7 @@ async function loadOwnedGcashPayments(req) {
 
   if (!payment.booking.checkoutId) return [payment];
   return Payment.findAll({
-    where: { provider: 'gcash', status: 'submitted', gcashReference: payment.gcashReference },
+    where: { provider: payment.provider, status: 'submitted', gcashReference: payment.gcashReference },
     include: [{ model: Booking, as: 'booking', required: true, where: { checkoutId: payment.booking.checkoutId } }],
   });
 }
@@ -330,7 +410,8 @@ const confirmGcashPayment = catchAsync(async (req, res) => {
     }
   });
 
-  await notifyPaid(payments);
+  // QR payments went to the platform, which now owes the coach their share.
+  await notifyPaid(payments, { notifyCoachPayout: payments[0].provider === PLATFORM_QR });
   sendResponse(res, 200, payments.length > 1 ? `GCash payment confirmed for ${payments.length} sessions` : 'GCash payment confirmed', payments[0]);
 });
 
@@ -522,6 +603,8 @@ module.exports = {
   getPlatformGcashAccount,
   startGcashCheckout,
   submitGcashPayment,
+  getQrCheckout,
+  submitQrPayment,
   confirmGcashPayment,
   rejectGcashPayment,
 };

@@ -27,6 +27,8 @@ module.exports = (sequelize, DataTypes) => {
       stripeCustomerId: { type: DataTypes.STRING, allowNull: true },
       gcashNumber: { type: DataTypes.STRING, allowNull: true },
       gcashAccountName: { type: DataTypes.STRING, allowNull: true },
+      // Admin only: image of the platform's InstaPay/GCash QR clients scan to pay.
+      gcashQrUrl: { type: DataTypes.STRING(500), allowNull: true },
     },
     {
       tableName: 'users',

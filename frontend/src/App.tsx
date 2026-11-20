@@ -420,7 +420,7 @@ function Overview({ session }: { session: Session }) {
   const unsettledCommission = completed.reduce((sum, b) => sum + (b.payment?.status === 'paid' && b.payment.provider === 'gcash' && !b.payment.platformFeeSettled ? Number(b.payment.platformFeeAmount || 0) : 0), 0);
   // Automatic (PayMongo) GCash: the platform holds the money, and this is
   // the coach's net share still waiting to be paid out to them.
-  const pendingPayout = completed.reduce((sum, b) => sum + (b.payment?.status === 'paid' && b.payment.provider === 'paymongo' && !b.payment.payoutSettled ? Number(b.payment.payoutAmount || 0) : 0), 0);
+  const pendingPayout = completed.reduce((sum, b) => sum + (b.payment?.status === 'paid' && (b.payment.provider === 'paymongo' || b.payment.provider === 'platform_qr') && !b.payment.payoutSettled ? Number(b.payment.payoutAmount || 0) : 0), 0);
   const next = upcoming[0];
   const memberSince = session.user.createdAt ? new Date(session.user.createdAt).getFullYear() : null;
 
@@ -449,7 +449,7 @@ function Overview({ session }: { session: Session }) {
         )}
         {pendingPayout > 0 && (
           <p style={{ marginTop: 4 }}>
-            <strong style={{ color: 'var(--turf-dark)' }}>₱{pendingPayout.toLocaleString()}</strong> is your net share from automatic GCash payments the platform collected — waiting for the platform to pay it out to you.
+            <strong style={{ color: 'var(--turf-dark)' }}>₱{pendingPayout.toLocaleString()}</strong> is your net share from payments the platform collected — waiting for the platform to pay it out to you.
           </p>
         )}
       </div>
@@ -492,8 +492,7 @@ function Bookings({ viewerRole }: { viewerRole: Role }) {
 }
 
 function needsClientPayment(booking: Booking) {
-  const awaitingGcash = booking.payment?.provider === 'gcash' && booking.payment?.status === 'submitted';
-  return booking.status === 'pending' && booking.payment?.status !== 'paid' && !awaitingGcash;
+  return booking.status === 'pending' && booking.payment?.status !== 'paid' && booking.payment?.status !== 'submitted';
 }
 
 // Matches MAX_BOOKINGS_PER_PAYMENT in the backend payment routes.
@@ -553,6 +552,8 @@ function BookingRow({ booking, viewerRole, onChanged, payViaGroup = false }: { b
   const act = async (fn: () => Promise<unknown>) => { setBusy(true); setMsg(''); try { await fn(); onChanged(); } catch (e) { setMsg(e instanceof Error ? e.message : 'That didn’t go through.'); setBusy(false); } };
 
   const awaitingGcash = booking.payment?.provider === 'gcash' && booking.payment?.status === 'submitted';
+  // Paid to the platform's QR — an admin verifies it, not the coach.
+  const awaitingPlatform = booking.payment?.provider === 'platform_qr' && booking.payment?.status === 'submitted';
   const needsPayment = viewerRole === 'client' && !payViaGroup && needsClientPayment(booking);
   const canReview = viewerRole === 'client' && booking.status === 'completed';
   const canResolveGcash = viewerRole === 'coach' && awaitingGcash;
@@ -564,6 +565,8 @@ function BookingRow({ booking, viewerRole, onChanged, payViaGroup = false }: { b
         <strong>{otherPartyName}</strong>
         <span>{booking.sportCategory?.name || 'Training'} · {booking.timeSlot?.startTime || 'Time pending'}</span>
         {awaitingGcash && <span style={{ color: 'var(--orange)' }}>GCash ref {booking.payment?.gcashReference} · awaiting confirmation{booking.checkoutId ? ' · covers every session paid with this reference' : ''}</span>}
+        {awaitingPlatform && <span style={{ color: 'var(--orange)' }}>{viewerRole === 'coach' ? 'Client paid the platform' : 'Paid'} · ref {booking.payment?.gcashReference} · waiting for the platform to verify</span>}
+        {booking.payment?.provider === 'platform_qr' && booking.payment?.status === 'failed' && viewerRole === 'client' && <span style={{ color: 'var(--danger)' }}>Payment ref {booking.payment.gcashReference} couldn’t be verified — please pay again or contact support</span>}
         {payViaGroup && <span style={{ color: 'var(--orange)' }}>Unpaid — pay in the checkout above</span>}
       </div>
       <span className={`status ${booking.status}`}>{booking.status}</span>
