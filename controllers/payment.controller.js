@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { Op } = require('sequelize');
 const { sequelize, Payment, Booking, Coach, Role, User } = require('../models');
 const ApiError = require('../utils/ApiError');
@@ -30,34 +31,78 @@ const roundMoney = (n) => Math.round(Number(n) * 100) / 100;
  * so one payment covers all of them. Sessions cancelled before payment just
  * drop out of the total.
  */
-async function loadCheckout(req, bookingId) {
-  const booking = await Booking.findByPk(bookingId);
-  if (!booking) throw ApiError.notFound('Booking not found');
+function assertPayable(req, booking) {
   if (booking.clientId !== req.user.id && req.user.role.name !== 'admin') {
     throw ApiError.forbidden('You do not have access to this booking');
   }
   if (booking.status !== 'pending') {
     throw ApiError.conflict('Only pending bookings can be paid for');
   }
+}
 
-  const candidates = booking.checkoutId
-    ? await Booking.findAll({
-        where: { checkoutId: booking.checkoutId, clientId: booking.clientId, status: 'pending' },
-        order: [['createdAt', 'ASC']],
-      })
-    : [booking];
+/**
+ * Two ways to say what's being paid for:
+ * - `bookingIds`: an explicit selection (the Bookings page "pay for these
+ *   sessions" card). All must be the same client's pending bookings with the
+ *   same coach — a manual GCash transfer goes to one coach's number.
+ * - `bookingId`: one booking, plus every pending sibling sharing its
+ *   checkoutId (sessions booked together on the coach page).
+ *
+ * Already-paid bookings drop out. With `claim`, used when a payment is
+ * actually started (never on a read), an explicit selection is stamped with
+ * a fresh shared checkoutId so webhooks and the coach's GCash confirm/reject
+ * treat exactly these bookings as one payment, and none stays attached to an
+ * older group that could also try to charge for it.
+ */
+async function loadCheckout(req, { bookingId, bookingIds }, { claim = false } = {}) {
+  let booking;
+  let candidates;
+
+  if (Array.isArray(bookingIds) && bookingIds.length) {
+    const ids = [...new Set(bookingIds)];
+    candidates = await Booking.findAll({ where: { id: ids }, order: [['createdAt', 'ASC']] });
+    if (candidates.length !== ids.length) throw ApiError.notFound('One or more bookings were not found');
+    candidates.forEach((b) => assertPayable(req, b));
+    if (new Set(candidates.map((b) => b.coachId)).size > 1 || new Set(candidates.map((b) => b.clientId)).size > 1) {
+      throw ApiError.badRequest('Sessions paid together must all be with the same coach');
+    }
+    booking = candidates[0];
+  } else {
+    booking = await Booking.findByPk(bookingId);
+    if (!booking) throw ApiError.notFound('Booking not found');
+    assertPayable(req, booking);
+    candidates = booking.checkoutId
+      ? await Booking.findAll({
+          where: { checkoutId: booking.checkoutId, clientId: booking.clientId, status: 'pending' },
+          order: [['createdAt', 'ASC']],
+        })
+      : [booking];
+  }
 
   const existing = await Payment.findAll({ where: { bookingId: candidates.map((b) => b.id) } });
   const paymentByBooking = new Map(existing.map((p) => [p.bookingId, p]));
   const bookings = candidates.filter((b) => paymentByBooking.get(b.id)?.status !== 'paid');
   if (!bookings.length) throw ApiError.conflict('This booking has already been paid for');
 
+  if (claim && Array.isArray(bookingIds) && bookingIds.length) {
+    const checkoutId = bookings.length > 1 ? crypto.randomUUID() : null;
+    await Booking.update({ checkoutId }, { where: { id: bookings.map((b) => b.id) } });
+    bookings.forEach((b) => { b.checkoutId = checkoutId; });
+  }
+
   return {
-    booking,
+    booking: bookings[0],
     bookings,
     paymentByBooking,
     total: roundMoney(bookings.reduce((sum, b) => sum + Number(b.price), 0)),
   };
+}
+
+/** What a payment request body/query asks to pay for. */
+function checkoutTarget(source) {
+  const raw = source.bookingIds;
+  const bookingIds = Array.isArray(raw) ? raw : typeof raw === 'string' && raw ? raw.split(',') : undefined;
+  return { bookingId: source.bookingId, bookingIds };
 }
 
 /** Creates or updates the Payment row for each booking in a checkout. */
@@ -80,7 +125,7 @@ function splitFee(price) {
 // POST /api/payments — create a Stripe PaymentIntent for a booking (or for
 // every booking in its multi-session checkout)
 const createPayment = catchAsync(async (req, res) => {
-  const checkout = await loadCheckout(req, req.body.bookingId);
+  const checkout = await loadCheckout(req, checkoutTarget(req.body), { claim: true });
 
   const paymentIntent = await paymentService.createPaymentIntent({
     amount: checkout.total,
@@ -160,7 +205,7 @@ const PLATFORM_FEE_RATE = Number(process.env.PLATFORM_FEE_RATE) || 0.1;
 // Scoped to the booking's own client/admin so a coach's personal GCash
 // number never leaks publicly.
 const getGcashInfo = catchAsync(async (req, res) => {
-  const checkout = await loadCheckout(req, req.params.bookingId);
+  const checkout = await loadCheckout(req, { ...checkoutTarget(req.query), bookingId: req.params.bookingId });
   const summary = { amount: checkout.total, sessionCount: checkout.bookings.length, platformFeeRate: PLATFORM_FEE_RATE };
 
   const paymongoConfigured = paymongoService.isPaymongoConfigured();
@@ -186,7 +231,7 @@ const getGcashInfo = catchAsync(async (req, res) => {
 // in the platform's PayMongo balance (not the coach's), and a webhook
 // confirms it — no reference number, no waiting on the coach to confirm.
 const startGcashCheckout = catchAsync(async (req, res) => {
-  const checkout = await loadCheckout(req, req.body.bookingId);
+  const checkout = await loadCheckout(req, checkoutTarget(req.body), { claim: true });
   const { booking, bookings } = checkout;
   const returnUrl = `${process.env.CLIENT_URL}/payment-return?bookingId=${booking.id}`;
 
@@ -227,7 +272,7 @@ const getPlatformGcashAccount = catchAsync(async (req, res) => {
 // coach owes (visible to admin), not deducted from what the client sends.
 const submitGcashPayment = catchAsync(async (req, res) => {
   const { referenceNumber } = req.body;
-  const checkout = await loadCheckout(req, req.body.bookingId);
+  const checkout = await loadCheckout(req, checkoutTarget(req.body), { claim: true });
 
   // One GCash transfer covers every session in the checkout, so they all
   // carry the same reference and are confirmed/rejected together.

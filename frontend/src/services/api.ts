@@ -19,6 +19,11 @@ export interface DashboardStats { totalUsers: number; totalCoaches: number; tota
 export interface SavedPaymentMethod { id: string; brand: string; last4: string; expMonth: number; expYear: number; isDefault: boolean; }
 export interface PlatformStats { coachCount: number; sportCount: number; completedSessions: number; averageRating: number | null; reviewCount: number; }
 
+/** One booking (paid with any checkout siblings) or an explicit list of the same coach's bookings. */
+export type PayTarget = string | string[];
+export const payTargetKey = (t: PayTarget) => (Array.isArray(t) ? t.join(',') : t);
+const payTargetBody = (t: PayTarget) => (Array.isArray(t) ? { bookingIds: t } : { bookingId: t });
+
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 function getStoredToken(): string | null {
@@ -110,13 +115,13 @@ export const api = {
   sendMessage: (payload: { bookingId: string; content: string }) => request<{ data: Message }>('/messages', { method: 'POST', body: JSON.stringify(payload) }),
 
   // ---- Payments ----
-  createPayment: (bookingId: string) => request<{ data: { payment: Payment; payments: Payment[]; total: number; clientSecret: string } }>('/payments', { method: 'POST', body: JSON.stringify({ bookingId }) }),
+  createPayment: (target: PayTarget) => request<{ data: { payment: Payment; payments: Payment[]; total: number; clientSecret: string } }>('/payments', { method: 'POST', body: JSON.stringify(payTargetBody(target)) }),
 
   // ---- GCash ----
-  gcashInfo: (bookingId: string) => request<{ data: { number: string; accountName: string; platformFeeRate: number; paymongoConfigured: boolean; amount: number; sessionCount: number } }>(`/payments/gcash-info/${bookingId}`),
+  gcashInfo: (target: PayTarget) => request<{ data: { number: string; accountName: string; platformFeeRate: number; paymongoConfigured: boolean; amount: number; sessionCount: number } }>(`/payments/gcash-info/${Array.isArray(target) ? target[0] : target}${Array.isArray(target) ? `?bookingIds=${target.join(',')}` : ''}`),
   platformGcashAccount: () => request<{ data: { number: string; accountName: string } }>('/payments/platform-gcash-account'),
-  startGcashCheckout: (bookingId: string) => request<{ data: { redirectUrl: string } }>('/payments/gcash/checkout', { method: 'POST', body: JSON.stringify({ bookingId }) }),
-  submitGcashPayment: (payload: { bookingId: string; referenceNumber: string }) => request<{ data: Payment }>('/payments/gcash', { method: 'POST', body: JSON.stringify(payload) }),
+  startGcashCheckout: (target: PayTarget) => request<{ data: { redirectUrl: string } }>('/payments/gcash/checkout', { method: 'POST', body: JSON.stringify(payTargetBody(target)) }),
+  submitGcashPayment: (target: PayTarget, referenceNumber: string) => request<{ data: Payment }>('/payments/gcash', { method: 'POST', body: JSON.stringify({ ...payTargetBody(target), referenceNumber }) }),
   confirmGcashPayment: (paymentId: string) => request<{ data: Payment }>(`/payments/${paymentId}/confirm-gcash`, { method: 'PUT' }),
   rejectGcashPayment: (paymentId: string) => request<{ data: Payment }>(`/payments/${paymentId}/reject-gcash`, { method: 'PUT' }),
 

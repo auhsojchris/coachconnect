@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Elements, PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 import { stripePromise } from '../services/stripe';
-import { api } from '../services/api';
+import { api, PayTarget, payTargetKey } from '../services/api';
 
 function PayForm({ onDone }: { onDone: () => void }) {
   const stripe = useStripe();
@@ -28,7 +28,7 @@ function PayForm({ onDone }: { onDone: () => void }) {
   </form>;
 }
 
-function CardCheckout({ bookingId, onDone }: { bookingId: string; onDone: () => void }) {
+function CardCheckout({ bookingId, onDone }: { bookingId: PayTarget; onDone: () => void }) {
   const [clientSecret, setClientSecret] = useState('');
   const [summary, setSummary] = useState<{ total: number; count: number } | null>(null);
   const [error, setError] = useState('');
@@ -37,7 +37,7 @@ function CardCheckout({ bookingId, onDone }: { bookingId: string; onDone: () => 
     api.createPayment(bookingId)
       .then((r) => { setClientSecret(r.data.clientSecret); setSummary({ total: r.data.total, count: r.data.payments?.length || 1 }); })
       .catch((e) => setError(e instanceof Error ? e.message : 'Could not start checkout.'));
-  }, [bookingId]);
+  }, [payTargetKey(bookingId)]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!stripePromise) return <p className="form-message">Payments aren’t configured yet — set VITE_STRIPE_PUBLISHABLE_KEY in the frontend .env.</p>;
   if (error) return <p className="error-text">{error}</p>;
@@ -63,7 +63,7 @@ function FeeBreakdown({ price, feeRate, feeLabel, footnote }: { price: number; f
   </div>;
 }
 
-function AutomaticGcashCheckout({ bookingId, price, feeRate }: { bookingId: string; price: number; feeRate: number }) {
+function AutomaticGcashCheckout({ bookingId, price, feeRate }: { bookingId: PayTarget; price: number; feeRate: number }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
@@ -90,7 +90,7 @@ function AutomaticGcashCheckout({ bookingId, price, feeRate }: { bookingId: stri
   </div>;
 }
 
-function ManualGcashCheckout({ bookingId, price, feeRate, number, accountName, onDone }: { bookingId: string; price: number; feeRate: number; number: string; accountName: string; onDone: () => void }) {
+function ManualGcashCheckout({ bookingId, price, feeRate, number, accountName, onDone }: { bookingId: PayTarget; price: number; feeRate: number; number: string; accountName: string; onDone: () => void }) {
   const [reference, setReference] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -100,7 +100,7 @@ function ManualGcashCheckout({ bookingId, price, feeRate, number, accountName, o
     setBusy(true);
     setError('');
     try {
-      await api.submitGcashPayment({ bookingId, referenceNumber: reference });
+      await api.submitGcashPayment(bookingId, reference);
       onDone();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not submit your payment.');
@@ -132,7 +132,7 @@ function SessionCountNote({ count }: { count: number }) {
   return <p className="form-message" style={{ marginBottom: 10 }}>This payment covers all {count} sessions in your checkout.</p>;
 }
 
-function GcashCheckout({ bookingId, amount, onDone }: { bookingId: string; amount?: number; onDone: () => void }) {
+function GcashCheckout({ bookingId, amount, onDone }: { bookingId: PayTarget; amount?: number; onDone: () => void }) {
   const [info, setInfo] = useState<{ number: string; accountName: string; platformFeeRate: number; paymongoConfigured: boolean; amount: number; sessionCount: number } | null>(null);
   const [infoError, setInfoError] = useState('');
 
@@ -140,7 +140,7 @@ function GcashCheckout({ bookingId, amount, onDone }: { bookingId: string; amoun
     api.gcashInfo(bookingId)
       .then((r) => setInfo(r.data))
       .catch((e) => setInfoError(e instanceof Error ? e.message : 'Could not load GCash checkout details.'));
-  }, [bookingId]);
+  }, [payTargetKey(bookingId)]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (infoError) return <p className="error-text">{infoError}</p>;
   if (!info) return <p className="form-message">Loading GCash details…</p>;
@@ -152,7 +152,7 @@ function GcashCheckout({ bookingId, amount, onDone }: { bookingId: string; amoun
     : <>{info.sessionCount > 1 && <SessionCountNote count={info.sessionCount} />}<ManualGcashCheckout bookingId={bookingId} price={price} feeRate={info.platformFeeRate} number={info.number} accountName={info.accountName} onDone={onDone} /></>;
 }
 
-export default function Checkout({ bookingId, amount, onDone, onCancel }: { bookingId: string; amount?: number; onDone: () => void; onCancel: () => void }) {
+export default function Checkout({ bookingId, amount, onDone, onCancel }: { bookingId: PayTarget; amount?: number; onDone: () => void; onCancel: () => void }) {
   const [method, setMethod] = useState<'card' | 'gcash'>('card');
 
   return <div className="checkout-box">

@@ -475,16 +475,18 @@ function Bookings({ viewerRole }: { viewerRole: Role }) {
   const refresh = () => { setLoading(true); api.bookings().then((r) => setItems(r.data || [])).finally(() => setLoading(false)); };
   useEffect(refresh, []);
 
-  // Multi-session checkouts still waiting for payment: paid once, together.
+  // Every unpaid session, grouped per coach, so they add up into one
+  // checkout no matter whether they were booked together or one by one.
   const unpaidCheckouts = viewerRole === 'client' ? Object.values(items.reduce<Record<string, Booking[]>>((acc, b) => {
-    if (b.checkoutId && needsClientPayment(b)) (acc[b.checkoutId] ||= []).push(b);
+    const coachKey = b.coach?.id;
+    if (coachKey && needsClientPayment(b)) (acc[coachKey] ||= []).push(b);
     return acc;
   }, {})).filter((group) => group.length > 1) : [];
   const groupedIds = new Set(unpaidCheckouts.flat().map((b) => b.id));
 
   return <div className="content-page">
     <div className="dash-header"><div><p className="eyebrow">{viewerRole === 'coach' ? 'MANAGE YOUR SESSIONS' : 'YOUR TRAINING LOG'}</p><h1>Bookings</h1></div>{viewerRole === 'client' && <Link className="button" to="/coaches">New booking <ArrowRight size={16} /></Link>}</div>
-    {!loading && unpaidCheckouts.map((group) => <CheckoutGroup key={group[0].checkoutId!} bookings={group} onChanged={refresh} />)}
+    {!loading && unpaidCheckouts.map((group) => <CheckoutGroup key={`${group[0].coach!.id}:${group.map((b) => b.id).sort().join(',')}`} bookings={group} onChanged={refresh} />)}
     <div className="dash-panel">{loading ? <Loading /> : items.length ? items.map((item) => <BookingRow key={item.id} booking={item} viewerRole={viewerRole} onChanged={refresh} payViaGroup={groupedIds.has(item.id)} />) : <EmptyState compact />}</div>
   </div>;
 }
@@ -494,29 +496,49 @@ function needsClientPayment(booking: Booking) {
   return booking.status === 'pending' && booking.payment?.status !== 'paid' && !awaitingGcash;
 }
 
+// Matches MAX_BOOKINGS_PER_PAYMENT in the backend payment routes.
+const MAX_BOOKINGS_PER_PAYMENT = 20;
+
 function CheckoutGroup({ bookings, onChanged }: { bookings: Booking[]; onChanged: () => void }) {
-  const [paying, setPaying] = useState(false);
   const sorted = [...bookings].sort((a, b) => `${a.timeSlot?.date} ${a.timeSlot?.startTime}`.localeCompare(`${b.timeSlot?.date} ${b.timeSlot?.startTime}`));
-  const total = Math.round(sorted.reduce((sum, b) => sum + Number(b.price), 0) * 100) / 100;
+  const [checked, setChecked] = useState<string[]>(() => sorted.slice(0, MAX_BOOKINGS_PER_PAYMENT).map((b) => b.id));
+  const [paying, setPaying] = useState(false);
+  const chosen = sorted.filter((b) => checked.includes(b.id));
+  const total = Math.round(chosen.reduce((sum, b) => sum + Number(b.price), 0) * 100) / 100;
   const coachName = sorted[0].coach?.user?.name || 'your coach';
+  const allChecked = chosen.length === Math.min(sorted.length, MAX_BOOKINGS_PER_PAYMENT);
+
+  const toggle = (id: string) => {
+    setPaying(false); // selection changed — restart checkout with the new set
+    setChecked((c) => (c.includes(id) ? c.filter((x) => x !== id) : c.length >= MAX_BOOKINGS_PER_PAYMENT ? c : [...c, id]));
+  };
+  const toggleAll = () => { setPaying(false); setChecked(allChecked ? [] : sorted.slice(0, MAX_BOOKINGS_PER_PAYMENT).map((b) => b.id)); };
 
   return <div className="dash-panel" style={{ marginBottom: 20, borderColor: 'var(--orange)' }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
-      <div>
-        <p className="eyebrow" style={{ marginBottom: 6 }}>AWAITING PAYMENT</p>
-        <h2 style={{ fontSize: '1.15rem' }}>{sorted.length} sessions with {coachName}</h2>
-        <ul style={{ listStyle: 'none', padding: 0, margin: '8px 0 0', fontSize: '.82rem' }}>
-          {sorted.map((b) => <li key={b.id} className="muted" style={{ padding: '2px 0' }}>
-            {b.timeSlot?.date ? new Date(`${b.timeSlot.date}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : 'TBD'} · {b.timeSlot?.startTime?.slice(0, 5)} · <span className="mono">₱{Number(b.price).toLocaleString()}</span>
-          </li>)}
-        </ul>
+      <div style={{ flex: '1 1 260px' }}>
+        <p className="eyebrow" style={{ marginBottom: 6 }}>CHECKOUT</p>
+        <h2 style={{ fontSize: '1.15rem' }}>{sorted.length} unpaid sessions with {coachName}</h2>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '10px 0 4px', fontSize: '.78rem', fontWeight: 700, cursor: 'pointer', width: 'auto' }}>
+          <input type="checkbox" style={{ width: 'auto', margin: 0 }} checked={allChecked} onChange={toggleAll} /> Select all
+        </label>
+        {sorted.map((b) => <label key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', fontSize: '.84rem', cursor: 'pointer', width: 'auto', margin: 0, fontWeight: 400 }}>
+          <input type="checkbox" style={{ width: 'auto', margin: 0 }} checked={checked.includes(b.id)} onChange={() => toggle(b.id)} />
+          <span style={{ flex: 1 }}>{b.timeSlot?.date ? new Date(`${b.timeSlot.date}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : 'TBD'} · {b.timeSlot?.startTime?.slice(0, 5)}–{b.timeSlot?.endTime?.slice(0, 5)} · {b.sportCategory?.name || 'Training'}</span>
+          <span className="mono">₱{Number(b.price).toLocaleString()}</span>
+        </label>)}
       </div>
-      <div style={{ textAlign: 'right' }}>
-        <div className="mono" style={{ fontSize: '1.4rem', fontWeight: 700 }}>₱{total.toLocaleString()}</div>
-        <button className="button" style={{ marginTop: 8 }} onClick={() => setPaying((p) => !p)}>{paying ? 'Hide payment' : `Pay for ${sorted.length} sessions`}</button>
+      <div style={{ textAlign: 'right', minWidth: 180 }}>
+        <p className="muted" style={{ fontSize: '.75rem' }}>Total ({chosen.length} session{chosen.length === 1 ? '' : 's'})</p>
+        <div className="mono" style={{ fontSize: '1.6rem', fontWeight: 700 }}>₱{total.toLocaleString()}</div>
+        <button className="button" style={{ marginTop: 8 }} disabled={!chosen.length} onClick={() => setPaying((p) => !p)}>
+          {paying ? 'Hide payment' : chosen.length ? `Pay ₱${total.toLocaleString()}` : 'Select sessions'}
+        </button>
       </div>
     </div>
-    {paying && <div style={{ marginTop: 16 }}><Checkout bookingId={sorted[0].id} amount={total} onDone={() => { setPaying(false); onChanged(); }} onCancel={() => setPaying(false)} /></div>}
+    {paying && chosen.length > 0 && <div style={{ marginTop: 16 }}>
+      <Checkout key={checked.join(',')} bookingId={chosen.map((b) => b.id)} amount={total} onDone={() => { setPaying(false); onChanged(); }} onCancel={() => setPaying(false)} />
+    </div>}
   </div>;
 }
 
@@ -542,7 +564,7 @@ function BookingRow({ booking, viewerRole, onChanged, payViaGroup = false }: { b
         <strong>{otherPartyName}</strong>
         <span>{booking.sportCategory?.name || 'Training'} · {booking.timeSlot?.startTime || 'Time pending'}</span>
         {awaitingGcash && <span style={{ color: 'var(--orange)' }}>GCash ref {booking.payment?.gcashReference} · awaiting confirmation{booking.checkoutId ? ' · covers every session paid with this reference' : ''}</span>}
-        {payViaGroup && <span style={{ color: 'var(--orange)' }}>Part of a multi-session checkout — pay above</span>}
+        {payViaGroup && <span style={{ color: 'var(--orange)' }}>Unpaid — pay in the checkout above</span>}
       </div>
       <span className={`status ${booking.status}`}>{booking.status}</span>
       <div style={{ display: 'flex', gap: 10 }}>
