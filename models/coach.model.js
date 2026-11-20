@@ -15,6 +15,11 @@ module.exports = (sequelize, DataTypes) => {
       isVerified: { type: DataTypes.BOOLEAN, defaultValue: false },
       gcashNumber: { type: DataTypes.STRING, allowNull: true },
       gcashAccountName: { type: DataTypes.STRING, allowNull: true },
+      tagline: { type: DataTypes.STRING(120), allowNull: true },
+      // Subset of SKILL_LEVELS, e.g. ['beginner', 'intermediate'].
+      skillLevels: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
+      // [{ title, year?, description? }]
+      achievements: { type: DataTypes.JSON, allowNull: true, defaultValue: [] },
     },
     {
       tableName: 'coaches',

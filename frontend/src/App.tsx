@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Bell, CalendarDays, Check, CircleUserRound, CreditCard, Dumbbell, Heart, LogOut, Menu, Pause, Play, Search, ShieldCheck, Star, X } from 'lucide-react';
-import { api, AppNotification, Booking, Coach, PlatformStats, Review, Role, SportCategory, TimeSlot, User } from './services/api';
+import { ArrowLeft, ArrowRight, Bell, CalendarDays, Check, CircleUserRound, CreditCard, Dumbbell, Heart, LogOut, Menu, Pause, Play, Search, ShieldCheck, Star, Trophy, X } from 'lucide-react';
+import { api, AppNotification, Booking, Coach, CoachProfile, PlatformStats, Review, Role, SKILL_LEVELS, SkillLevel, SportCategory, TimeSlot, User } from './services/api';
 import { EmptyState, ErrorMessage, Loading, Stat } from './components/shared';
 import Checkout from './pages/Checkout';
 import ReviewForm from './pages/ReviewForm';
-import { CoachAvailability, CoachProfileEditor } from './pages/CoachDashboard';
+import { CoachAvailability, CoachProfileEditor, profileChecklist } from './pages/CoachDashboard';
 import AdminPanel from './pages/AdminPanel';
 import PaymentMethods from './pages/PaymentMethods';
 import PaymentReturn from './pages/PaymentReturn';
@@ -128,20 +128,22 @@ function CoachDirectory() {
   const [query, setQuery] = useState('');
   const [sport, setSport] = useState('');
   const [minRating, setMinRating] = useState(0);
+  const [level, setLevel] = useState<SkillLevel | ''>('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => { api.sportCategories().then((r) => setCategories(r.data)).catch(() => {}); }, []);
   useEffect(() => {
     setLoading(true);
-    api.coaches({ city: query || undefined, sport: sport || undefined, minRating: minRating || undefined })
+    setError('');
+    api.coaches({ city: query || undefined, sport: sport || undefined, minRating: minRating || undefined, level: level || undefined })
       .then((r) => setCoaches(r.data || []))
       .catch((e) => setError(e instanceof Error ? e.message : 'Could not load coaches.'))
       .finally(() => setLoading(false));
-  }, [query, sport, minRating]);
+  }, [query, sport, minRating, level]);
 
   return <section className="directory">
-    <div className="page-intro"><div><p className="eyebrow">THE COACH ROSTER</p><h1>Find your<br /><em>right fit.</em></h1></div><p>Expert guidance for wherever you are in your game. Search by city, sport, or rating.</p></div>
+    <div className="page-intro"><div><p className="eyebrow">THE COACH ROSTER</p><h1>Find your<br /><em>right fit.</em></h1></div><p>Expert guidance for wherever you are in your game. Search by city, sport, rating, or your level.</p></div>
     <div className="searchbar"><Search size={19} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by city..." /><span>⌘ K</span></div>
     <div className="filter-bar">
       <select value={sport} onChange={(e) => setSport(e.target.value)}>
@@ -152,6 +154,10 @@ function CoachDirectory() {
         <option value={0}>Any rating</option>
         <option value={4}>4.0+ stars</option>
         <option value={4.5}>4.5+ stars</option>
+      </select>
+      <select value={level} onChange={(e) => setLevel(e.target.value as SkillLevel | '')} aria-label="Your level">
+        <option value="">Any level</option>
+        {SKILL_LEVELS.map((l) => <option key={l} value={l}>{l[0].toUpperCase() + l.slice(1)}</option>)}
       </select>
     </div>
     {loading ? <Loading /> : error ? <ErrorMessage text={error} /> : coaches.length ? <div className="coach-grid">{coaches.map((coach) => <CoachCard key={coach.id} coach={coach} />)}</div> : <EmptyState />}
@@ -196,6 +202,9 @@ function CoachDetails({ session }: { session: Session | null }) {
   };
 
   const tags = coach.specializations?.map((s) => s.sportCategory?.name).filter(Boolean) as string[] || [];
+  const levels = SKILL_LEVELS.filter((l) => coach.skillLevels?.includes(l));
+  const certified = (coach.specializations || []).filter((s) => s.certification || s.yearsExperience);
+  const achievements = [...(coach.achievements || [])].sort((a, b) => (b.year || 0) - (a.year || 0));
 
   return <section className="coach-detail">
     <Link to="/coaches" className="backlink">← Back to coaches</Link>
@@ -205,15 +214,34 @@ function CoachDetails({ session }: { session: Session | null }) {
         <div className="detail-title">
           <span className="eyebrow">{coach.isVerified ? 'VERIFIED COACH' : 'COACH'}</span>
           <h1>{coach.user?.name || 'Coach'}</h1>
+          {coach.tagline && <p style={{ fontWeight: 600, marginBottom: 4 }}>{coach.tagline}</p>}
           <p>{coach.city || coach.location || 'Online coaching'} · {coach.experienceYears || 0}+ years experience</p>
           <div className="detail-rating"><Star size={18} fill="currentColor" /> {Number(coach.averageRating || 0).toFixed(1)} <span>{coach.totalReviews || 0} reviews</span></div>
           {tags.length > 0 && <div className="tag-row" style={{ margin: '14px 0 0' }}>{tags.map((t) => <span key={t}>{t}</span>)}</div>}
+          {levels.length > 0 && <p className="muted" style={{ fontSize: '.8rem', marginTop: 10 }}><strong>Coaches:</strong> {levels.map((l) => l[0].toUpperCase() + l.slice(1)).join(' · ')}</p>}
         </div>
         <div className="tab-strip" style={{ gridColumn: '1 / -1', marginTop: 26 }}>
           <button className={`tab-btn ${tab === 'about' ? 'active' : ''}`} onClick={() => setTab('about')}>About</button>
           <button className={`tab-btn ${tab === 'reviews' ? 'active' : ''}`} onClick={() => setTab('reviews')}>Reviews ({reviews.length})</button>
         </div>
-        {tab === 'about' && <p className="bio" style={{ marginTop: 20 }}>{coach.bio || 'Focused, practical coaching designed around your goals, your body, and the life you actually live.'}</p>}
+        {tab === 'about' && <div style={{ gridColumn: '1 / -1', marginTop: 20 }}>
+          <p className="bio">{coach.bio || 'Focused, practical coaching designed around your goals, your body, and the life you actually live.'}</p>
+          {certified.length > 0 && <>
+            <p className="eyebrow" style={{ margin: '26px 0 10px' }}>CERTIFICATIONS</p>
+            {certified.map((s) => <div key={s.sportCategoryId} style={{ borderBottom: '1px solid var(--line)', padding: '10px 0', fontSize: '.88rem' }}>
+              <strong>{s.sportCategory?.name || 'Coaching'}</strong>
+              <span className="muted"> · {[s.certification, s.yearsExperience ? `${s.yearsExperience} yrs` : ''].filter(Boolean).join(' · ')}</span>
+            </div>)}
+          </>}
+          {achievements.length > 0 && <>
+            <p className="eyebrow" style={{ margin: '26px 0 10px' }}>ACHIEVEMENTS</p>
+            {achievements.map((a, i) => <div key={i} style={{ display: 'flex', gap: 12, borderBottom: '1px solid var(--line)', padding: '10px 0' }}>
+              <Trophy size={18} style={{ color: '#c28a35', flexShrink: 0, marginTop: 2 }} />
+              <div><strong style={{ fontSize: '.9rem' }}>{a.title}</strong>{a.year && <span className="muted mono" style={{ fontSize: '.75rem' }}> · {a.year}</span>}
+                {a.description && <p className="muted" style={{ fontSize: '.82rem', marginTop: 2 }}>{a.description}</p>}</div>
+            </div>)}
+          </>}
+        </div>}
         {tab === 'reviews' && (
           <div style={{ gridColumn: '1 / -1', marginTop: 6 }}>
             {reviews.length === 0 ? <p className="muted">No reviews yet — be the first to train and rate this coach.</p> : reviews.map((r) => (
@@ -267,11 +295,12 @@ function Dashboard({ session, onLogout, onUserChange }: { session: Session; onLo
       {role !== 'admin' && <Link className={`side-link ${isActive('/dashboard/messages') ? 'active' : ''}`} to="/dashboard/messages"><Bell size={17} /> Messages{unreadMessages > 0 && <span className="message-badge">{unreadMessages > 99 ? '99+' : unreadMessages}</span>}</Link>}
       <Link className={`side-link ${isActive('/dashboard/profile') ? 'active' : ''}`} to="/dashboard/profile"><CircleUserRound size={17} /> My profile</Link>
       {role === 'client' && <Link className={`side-link ${isActive('/dashboard/payment-methods') ? 'active' : ''}`} to="/dashboard/payment-methods"><CreditCard size={17} /> Payment methods</Link>}
-      {role === 'coach' && <>
-        <Link className={`side-link ${isActive('/dashboard/coach/availability') ? 'active' : ''}`} to="/dashboard/coach/availability"><CalendarDays size={17} /> Availability</Link>
-        <Link className={`side-link ${isActive('/dashboard/coach/profile') ? 'active' : ''}`} to="/dashboard/coach/profile"><CircleUserRound size={17} /> Profile & rates</Link>
-      </>}
       <Link className={`side-link ${isActive('/dashboard/notifications') ? 'active' : ''}`} to="/dashboard/notifications"><Bell size={17} /> Notifications</Link>
+      {role === 'coach' && <>
+        <p className="side-label">COACHING</p>
+        <Link className={`side-link ${isActive('/dashboard/coach/profile') ? 'active' : ''}`} to="/dashboard/coach/profile"><Trophy size={17} /> Coach profile</Link>
+        <Link className={`side-link ${isActive('/dashboard/coach/availability') ? 'active' : ''}`} to="/dashboard/coach/availability"><CalendarDays size={17} /> Availability</Link>
+      </>}
       {role === 'admin' && <><p className="side-label">ADMIN</p><Link className={`side-link ${isActive('/dashboard/admin') ? 'active' : ''}`} to="/dashboard/admin"><ShieldCheck size={17} /> Command center</Link></>}
       <div className="side-bottom"><div className="mini-avatar">{session.user.name.slice(0, 1)}</div><div><strong>{session.user.name}</strong><small>{role}</small></div><button className="icon-btn" onClick={onLogout} title="Log out"><LogOut size={16} /></button></div>
     </aside>
@@ -292,18 +321,35 @@ function Dashboard({ session, onLogout, onUserChange }: { session: Session; onLo
   </section>;
 }
 
+function CoachProfileStrength({ coach }: { coach: CoachProfile | null }) {
+  const { items, percent } = profileChecklist(coach);
+  const todo = items.filter((i) => !i.done);
+  return <section className="dash-panel accent-panel">
+    <p className="eyebrow">PROFILE STRENGTH</p>
+    <h2>{percent}% complete</h2>
+    <div style={{ height: 6, borderRadius: 6, background: 'rgba(255,255,255,.25)', margin: '0 0 16px' }}>
+      <div style={{ width: `${percent}%`, height: '100%', borderRadius: 6, background: 'var(--gold)' }} />
+    </div>
+    {todo.length === 0
+      ? <p>Your profile is complete — athletes can see your levels, sports and achievements.</p>
+      : <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 24px', fontSize: '.88rem', lineHeight: 1.9 }}>{todo.map((i) => <li key={i.label}>○ {i.label}</li>)}</ul>}
+    <Link className="underlink" to="/dashboard/coach/profile">{todo.length ? 'Finish your profile' : 'Edit your profile'} <ArrowRight size={16} /></Link>
+  </section>;
+}
+
 function Overview({ session }: { session: Session }) {
   const role = (session.user.role?.name || 'client') as Role;
   const [upcoming, setUpcoming] = useState<Booking[]>([]);
   const [completed, setCompleted] = useState<Booking[]>([]);
-  const [rating, setRating] = useState<number | null>(null);
+  const [coachProfile, setCoachProfile] = useState<CoachProfile | null>(null);
+  const rating = coachProfile?.averageRating ?? null;
   const [platformGcash, setPlatformGcash] = useState<{ number: string; accountName: string } | null>(null);
 
   useEffect(() => {
     api.bookings({ timeframe: 'upcoming' }).then((r) => setUpcoming(r.data || [])).catch(() => {});
     api.bookings({ status: 'completed' }).then((r) => setCompleted(r.data || [])).catch(() => {});
     if (role === 'coach') {
-      api.profile().then((r) => setRating(r.data.coachProfile?.averageRating ?? null)).catch(() => {});
+      api.profile().then((r) => setCoachProfile(r.data.coachProfile ?? null)).catch(() => {});
       api.platformGcashAccount().then((r) => setPlatformGcash(r.data)).catch(() => {});
     }
   }, [role]);
@@ -326,6 +372,7 @@ function Overview({ session }: { session: Session }) {
     <div className="dash-header">
       <div><p className="eyebrow">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase()}</p><h1>Good morning, {session.user.name.split(' ')[0]}.</h1><p className="muted">Keep the momentum going.</p></div>
       {role === 'client' && <Link className="button" to="/coaches">Book a session <ArrowRight size={16} /></Link>}
+      {role === 'coach' && <Link className="button" to="/dashboard/coach/profile">Edit coach profile <ArrowRight size={16} /></Link>}
     </div>
     <div className="stat-grid">
       <Stat label="Upcoming sessions" value={String(upcoming.length).padStart(2, '0')} icon={<CalendarDays />} />
@@ -356,10 +403,12 @@ function Overview({ session }: { session: Session }) {
         <div className="panel-heading"><div><p className="eyebrow">NEXT UP</p><h2>Your upcoming session</h2></div><Link to="/dashboard/bookings">See all <ArrowRight size={15} /></Link></div>
         {next ? <BookingRow booking={next} viewerRole={role} onChanged={() => window.location.reload()} /> : <EmptyState compact />}
       </section>
-      <section className="dash-panel accent-panel">
-        <p className="eyebrow">A LITTLE NUDGE</p><h2>Consistency beats intensity.</h2><p>One focused session today can change the shape of your whole week.</p>
-        <Link className="underlink" to="/coaches">Find your next session <ArrowRight size={16} /></Link>
-      </section>
+      {role === 'coach' ? <CoachProfileStrength coach={coachProfile} /> : (
+        <section className="dash-panel accent-panel">
+          <p className="eyebrow">A LITTLE NUDGE</p><h2>Consistency beats intensity.</h2><p>One focused session today can change the shape of your whole week.</p>
+          <Link className="underlink" to="/coaches">Find your next session <ArrowRight size={16} /></Link>
+        </section>
+      )}
     </div>
   </>;
 }

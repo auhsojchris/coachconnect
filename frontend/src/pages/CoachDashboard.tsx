@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
-import { api, Availability, CoachProfile, SportCategory, TimeSlot } from '../services/api';
+import { Link } from 'react-router-dom';
+import { Eye, Plus, Trash2 } from 'lucide-react';
+import { api, Availability, CoachProfile, SKILL_LEVELS, SkillLevel, SportCategory, TimeSlot } from '../services/api';
 import { Loading, ErrorMessage } from '../components/shared';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -140,10 +141,43 @@ export function CoachAvailability() {
   </div>;
 }
 
+const LEVEL_LABELS: Record<SkillLevel, { label: string; hint: string }> = {
+  beginner: { label: 'Beginner', hint: 'Never played / just starting' },
+  novice: { label: 'Novice', hint: 'Knows the basics, building habits' },
+  intermediate: { label: 'Intermediate', hint: 'Plays regularly, refining technique' },
+  advanced: { label: 'Advanced', hint: 'Competitive / tournament level' },
+};
+
+type SportRow = { sportCategoryId: string; certification: string; yearsExperience: number };
+type AchievementRow = { title: string; year: string; description: string };
+type EditorForm = {
+  tagline: string; bio: string; experienceYears: number; hourlyRate: number;
+  location: string; city: string; country: string;
+  gcashNumber: string; gcashAccountName: string;
+  skillLevels: SkillLevel[]; sports: SportRow[]; achievements: AchievementRow[];
+};
+
+const chipStyle = (on: boolean): React.CSSProperties => ({
+  display: 'flex', alignItems: 'flex-start', gap: 8, width: 'auto', margin: 0, cursor: 'pointer',
+  border: `1.5px solid ${on ? 'var(--turf)' : 'var(--line)'}`, borderRadius: 8, padding: '10px 12px',
+  background: on ? '#f1f5f3' : 'transparent',
+});
+
+function Section({ eyebrow, hint, children }: { eyebrow: string; hint?: string; children: React.ReactNode }) {
+  return <div className="dash-panel" style={{ marginBottom: 20 }}>
+    <p className="eyebrow" style={{ marginBottom: hint ? 6 : 14 }}>{eyebrow}</p>
+    {hint && <p className="muted" style={{ fontSize: '.8rem', marginBottom: 14 }}>{hint}</p>}
+    {children}
+  </div>;
+}
+
 export function CoachProfileEditor() {
   const { coach, loading, error } = useOwnCoach();
   const [categories, setCategories] = useState<SportCategory[]>([]);
-  const [form, setForm] = useState<{ bio: string; experienceYears: number; hourlyRate: number; location: string; city: string; country: string; gcashNumber: string; gcashAccountName: string; sportIds: string[] }>({ bio: '', experienceYears: 0, hourlyRate: 0, location: '', city: '', country: '', gcashNumber: '', gcashAccountName: '', sportIds: [] });
+  const [form, setForm] = useState<EditorForm>({
+    tagline: '', bio: '', experienceYears: 0, hourlyRate: 0, location: '', city: '', country: '',
+    gcashNumber: '', gcashAccountName: '', skillLevels: [], sports: [], achievements: [],
+  });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
 
@@ -151,17 +185,31 @@ export function CoachProfileEditor() {
   useEffect(() => {
     if (!coach) return;
     setForm({
-      bio: coach.bio || '', experienceYears: coach.experienceYears || 0, hourlyRate: coach.hourlyRate || 0,
+      tagline: coach.tagline || '', bio: coach.bio || '',
+      experienceYears: coach.experienceYears || 0, hourlyRate: Number(coach.hourlyRate) || 0,
       location: coach.location || '', city: coach.city || '', country: coach.country || '',
       gcashNumber: coach.gcashNumber || '', gcashAccountName: coach.gcashAccountName || '',
-      sportIds: (coach.specializations || []).map((s) => s.sportCategoryId),
+      skillLevels: coach.skillLevels || [],
+      sports: (coach.specializations || []).map((s) => ({ sportCategoryId: s.sportCategoryId, certification: s.certification || '', yearsExperience: s.yearsExperience || 0 })),
+      achievements: (coach.achievements || []).map((a) => ({ title: a.title, year: a.year ? String(a.year) : '', description: a.description || '' })),
     });
   }, [coach]);
 
   if (loading) return <Loading />;
   if (error || !coach) return <ErrorMessage text={error || 'No coach profile found.'} />;
 
-  const toggleSport = (id: string) => setForm((f) => ({ ...f, sportIds: f.sportIds.includes(id) ? f.sportIds.filter((s) => s !== id) : [...f.sportIds, id] }));
+  const set = <K extends keyof EditorForm>(key: K, value: EditorForm[K]) => setForm((f) => ({ ...f, [key]: value }));
+
+  const toggleLevel = (level: SkillLevel) => set('skillLevels', form.skillLevels.includes(level) ? form.skillLevels.filter((l) => l !== level) : [...form.skillLevels, level]);
+
+  const toggleSport = (id: string) => set('sports', form.sports.some((s) => s.sportCategoryId === id)
+    ? form.sports.filter((s) => s.sportCategoryId !== id)
+    : [...form.sports, { sportCategoryId: id, certification: '', yearsExperience: 0 }]);
+  const updateSport = (id: string, patch: Partial<SportRow>) => set('sports', form.sports.map((s) => (s.sportCategoryId === id ? { ...s, ...patch } : s)));
+
+  const addAchievement = () => set('achievements', [...form.achievements, { title: '', year: '', description: '' }]);
+  const updateAchievement = (i: number, patch: Partial<AchievementRow>) => set('achievements', form.achievements.map((a, idx) => (idx === i ? { ...a, ...patch } : a)));
+  const removeAchievement = (i: number) => set('achievements', form.achievements.filter((_, idx) => idx !== i));
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -169,44 +217,107 @@ export function CoachProfileEditor() {
     setMessage('');
     try {
       await api.updateCoach(coach.id, {
-        bio: form.bio, experienceYears: form.experienceYears, hourlyRate: form.hourlyRate,
+        tagline: form.tagline, bio: form.bio, experienceYears: form.experienceYears, hourlyRate: form.hourlyRate,
         location: form.location, city: form.city, country: form.country,
         gcashNumber: form.gcashNumber, gcashAccountName: form.gcashAccountName,
-        specializations: form.sportIds.map((sportCategoryId) => ({ sportCategoryId })),
+        skillLevels: form.skillLevels,
+        specializations: form.sports.map((s) => ({ sportCategoryId: s.sportCategoryId, certification: s.certification.trim() || undefined, yearsExperience: s.yearsExperience })),
+        // Drop rows the coach added but left blank instead of failing validation.
+        achievements: form.achievements.filter((a) => a.title.trim()).map((a) => ({ title: a.title.trim(), year: a.year ? Number(a.year) : null, description: a.description.trim() || null })),
       });
-      setMessage('Profile updated.');
+      setMessage('Profile updated — athletes will see these changes on your public page.');
     } catch (err) {
       setMessage(err instanceof Error ? err.message : 'Could not save changes.');
     } finally { setBusy(false); }
   };
 
   return <div className="content-page">
-    <div className="dash-header"><div><p className="eyebrow">HOW ATHLETES FIND YOU</p><h1>Profile & rates</h1></div></div>
-    <form onSubmit={save} className="dash-panel">
-      <div className="mini-form">
-        <label className="full">Bio<textarea rows={4} value={form.bio} onChange={(e) => setForm({ ...form, bio: e.target.value })} placeholder="Tell athletes about your coaching style..." /></label>
-        <label>Hourly rate (PHP)<input type="number" min={0} step={1} value={form.hourlyRate} onChange={(e) => setForm({ ...form, hourlyRate: Number(e.target.value) })} /></label>
-        <label>Years of experience<input type="number" min={0} value={form.experienceYears} onChange={(e) => setForm({ ...form, experienceYears: Number(e.target.value) })} /></label>
-        <label>City<input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></label>
-        <label>Location / venue<input value={form.location} onChange={(e) => setForm({ ...form, location: e.target.value })} placeholder="e.g. Riverside Courts" /></label>
-        <label>Country<input value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })} /></label>
-      </div>
-      <p className="eyebrow" style={{ margin: '22px 0 10px' }}>GCASH PAYOUTS</p>
-      <p className="muted" style={{ fontSize: '.8rem', marginBottom: 14 }}>Clients who pay via GCash send money straight to this number — set it up so you can get paid.</p>
-      <div className="mini-form">
-        <label>GCash number<input value={form.gcashNumber} onChange={(e) => setForm({ ...form, gcashNumber: e.target.value })} placeholder="e.g. 0917 000 0000" /></label>
-        <label>GCash account name<input value={form.gcashAccountName} onChange={(e) => setForm({ ...form, gcashAccountName: e.target.value })} placeholder="Name on the GCash account" /></label>
-      </div>
-      <p className="eyebrow" style={{ margin: '22px 0 10px' }}>SPORTS YOU COACH</p>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-        {categories.map((c) => (
-          <label key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 6, width: 'auto', border: '1px solid var(--line)', padding: '8px 12px', margin: 0, cursor: 'pointer', background: form.sportIds.includes(c.id) ? '#f1f5f3' : 'transparent' }}>
-            <input type="checkbox" style={{ width: 'auto', margin: 0, padding: 0 }} checked={form.sportIds.includes(c.id)} onChange={() => toggleSport(c.id)} /> {c.name}
-          </label>
+    <div className="dash-header">
+      <div><p className="eyebrow">HOW ATHLETES FIND YOU</p><h1>Coach profile</h1><p className="muted">Everything here appears on your public coach page.</p></div>
+      <Link className="btn-outline" to={`/coaches/${coach.id}`}><Eye size={15} /> View public page</Link>
+    </div>
+    <form onSubmit={save}>
+      <Section eyebrow="BASICS">
+        <div className="mini-form">
+          <label className="full">Tagline<input maxLength={120} value={form.tagline} onChange={(e) => set('tagline', e.target.value)} placeholder="e.g. Former varsity setter helping beginners love volleyball" /></label>
+          <label className="full">Bio<textarea rows={4} value={form.bio} onChange={(e) => set('bio', e.target.value)} placeholder="Tell athletes about your coaching style..." /></label>
+          <label>Years of coaching experience<input type="number" min={0} max={60} value={form.experienceYears} onChange={(e) => set('experienceYears', Number(e.target.value))} /></label>
+          <label>City<input value={form.city} onChange={(e) => set('city', e.target.value)} /></label>
+          <label>Location / venue<input value={form.location} onChange={(e) => set('location', e.target.value)} placeholder="e.g. Riverside Courts" /></label>
+          <label>Country<input value={form.country} onChange={(e) => set('country', e.target.value)} /></label>
+        </div>
+      </Section>
+
+      <Section eyebrow="RATES">
+        <div className="mini-form">
+          <label>Rate per session (PHP)<input type="number" min={0} step={1} value={form.hourlyRate} onChange={(e) => set('hourlyRate', Number(e.target.value))} /></label>
+        </div>
+      </Section>
+
+      <Section eyebrow="LEVELS YOU COACH" hint="Pick every level you’re comfortable taking on. Athletes see this before booking.">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 8 }}>
+          {SKILL_LEVELS.map((level) => (
+            <label key={level} style={chipStyle(form.skillLevels.includes(level))}>
+              <input type="checkbox" style={{ width: 'auto', margin: '3px 0 0', padding: 0 }} checked={form.skillLevels.includes(level)} onChange={() => toggleLevel(level)} />
+              <span><strong>{LEVEL_LABELS[level].label}</strong><br /><small className="muted">{LEVEL_LABELS[level].hint}</small></span>
+            </label>
+          ))}
+        </div>
+      </Section>
+
+      <Section eyebrow="SPORTS & CERTIFICATIONS" hint="Select the sports you coach, then add any certification and years of experience for each.">
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: form.sports.length ? 16 : 0 }}>
+          {categories.map((c) => {
+            const on = form.sports.some((s) => s.sportCategoryId === c.id);
+            return <label key={c.id} style={{ ...chipStyle(on), alignItems: 'center' }}>
+              <input type="checkbox" style={{ width: 'auto', margin: 0, padding: 0 }} checked={on} onChange={() => toggleSport(c.id)} /> {c.name}
+            </label>;
+          })}
+        </div>
+        {form.sports.map((s) => (
+          <div key={s.sportCategoryId} className="mini-form" style={{ borderTop: '1px solid var(--line)', paddingTop: 12, marginTop: 12 }}>
+            <p style={{ gridColumn: '1 / -1', fontWeight: 700 }}>{categories.find((c) => c.id === s.sportCategoryId)?.name || 'Sport'}</p>
+            <label>Certification<input maxLength={150} value={s.certification} onChange={(e) => updateSport(s.sportCategoryId, { certification: e.target.value })} placeholder="e.g. PSC Level 2 Coach" /></label>
+            <label>Years coaching this sport<input type="number" min={0} max={60} value={s.yearsExperience} onChange={(e) => updateSport(s.sportCategoryId, { yearsExperience: Number(e.target.value) })} /></label>
+          </div>
         ))}
-      </div>
+      </Section>
+
+      <Section eyebrow="ACHIEVEMENTS" hint="Titles, medals, notable athletes you’ve coached — anything that builds trust.">
+        {form.achievements.length === 0 && <p className="muted" style={{ marginBottom: 12 }}>No achievements yet.</p>}
+        {form.achievements.map((a, i) => (
+          <div key={i} className="mini-form" style={{ borderTop: i ? '1px solid var(--line)' : 0, paddingTop: i ? 12 : 0, marginBottom: 12, gridTemplateColumns: '1fr 120px auto', alignItems: 'end' }}>
+            <label>Title<input maxLength={120} value={a.title} onChange={(e) => updateAchievement(i, { title: e.target.value })} placeholder="e.g. UAAP Season 85 Champion" /></label>
+            <label>Year<input type="number" min={1950} max={2100} value={a.year} onChange={(e) => updateAchievement(i, { year: e.target.value })} placeholder="2023" /></label>
+            <button type="button" className="btn-outline danger" onClick={() => removeAchievement(i)} aria-label="Remove achievement"><Trash2 size={14} /></button>
+            <label style={{ gridColumn: '1 / -1' }}>Details (optional)<input maxLength={300} value={a.description} onChange={(e) => updateAchievement(i, { description: e.target.value })} /></label>
+          </div>
+        ))}
+        {form.achievements.length < 20 && <button type="button" className="btn-outline" onClick={addAchievement}><Plus size={14} /> Add achievement</button>}
+      </Section>
+
+      <Section eyebrow="GCASH PAYOUTS" hint="Private — never shown on your public page. Used to pay out your earnings.">
+        <div className="mini-form">
+          <label>GCash number<input value={form.gcashNumber} onChange={(e) => set('gcashNumber', e.target.value)} placeholder="e.g. 0917 000 0000" /></label>
+          <label>GCash account name<input value={form.gcashAccountName} onChange={(e) => set('gcashAccountName', e.target.value)} placeholder="Name on the GCash account" /></label>
+        </div>
+      </Section>
+
       {message && <p className="form-message">{message}</p>}
-      <button className="button" type="submit" disabled={busy} style={{ marginTop: 20 }}>{busy ? 'Saving…' : 'Save changes'}</button>
+      <button className="button" type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</button>
     </form>
   </div>;
+}
+
+/** Share of the public-profile fields a coach has filled in, for the overview nudge. */
+export function profileChecklist(coach: CoachProfile | null | undefined) {
+  const items = [
+    { label: 'Write a tagline', done: !!coach?.tagline },
+    { label: 'Add a bio', done: !!coach?.bio },
+    { label: 'Set your session rate', done: Number(coach?.hourlyRate) > 0 },
+    { label: 'Choose the levels you coach', done: (coach?.skillLevels?.length || 0) > 0 },
+    { label: 'Pick your sports', done: (coach?.specializations?.length || 0) > 0 },
+    { label: 'Add an achievement', done: (coach?.achievements?.length || 0) > 0 },
+  ];
+  return { items, percent: Math.round((items.filter((i) => i.done).length / items.length) * 100) };
 }

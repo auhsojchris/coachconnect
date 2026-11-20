@@ -9,6 +9,7 @@ const {
   TimeSlot,
 } = require('../models');
 const { uploadImage } = require('../utils/imageUpload');
+const { SKILL_LEVELS } = require('../validators/coach.validator');
 const ApiError = require('../utils/ApiError');
 const catchAsync = require('../utils/catchAsync');
 const { sendResponse } = require('../utils/ApiResponse');
@@ -30,11 +31,24 @@ const publicCoachInclude = [
 // actual booking) or to the coach's own authenticated profile, never here.
 const publicCoachAttributes = { exclude: ['gcashNumber', 'gcashAccountName'] };
 
+// "skill_levels JSON array contains <level>" — JSON containment has no
+// portable SQL, so branch on dialect (MySQL locally, Postgres in production).
+// `level` is validated against SKILL_LEVELS and escaped regardless.
+function skillLevelCondition(level) {
+  const qi = (name) => sequelize.getQueryInterface().quoteIdentifier(name);
+  const column = `${qi('Coach')}.${qi('skill_levels')}`;
+  if (sequelize.getDialect() === 'postgres') {
+    return sequelize.literal(`(${column}::jsonb @> ${sequelize.escape(JSON.stringify([level]))}::jsonb)`);
+  }
+  return sequelize.literal(`JSON_CONTAINS(${column}, ${sequelize.escape(JSON.stringify(level))})`);
+}
+
 // GET /api/coaches — search & filter coaches
 const listCoaches = catchAsync(async (req, res) => {
-  const { sport, city, minPrice, maxPrice, minRating, date, page = 1, limit = 20 } = req.query;
+  const { sport, city, minPrice, maxPrice, minRating, level, date, page = 1, limit = 20 } = req.query;
 
   const where = {};
+  if (level) where[Op.and] = [skillLevelCondition(level)];
   if (city) where.city = { [Op.like]: `%${city}%` };
   if (minPrice || maxPrice) {
     where.hourlyRate = {};
@@ -114,9 +128,23 @@ const updateCoach = catchAsync(async (req, res) => {
   if (!coach) throw ApiError.notFound('Coach not found');
   assertCanManageCoach(req, coach);
 
-  const { bio, experienceYears, hourlyRate, location, city, country, gcashNumber, gcashAccountName, specializations } = req.body;
+  const {
+    bio, experienceYears, hourlyRate, location, city, country, gcashNumber, gcashAccountName,
+    specializations, tagline, skillLevels, achievements,
+  } = req.body;
 
   await sequelize.transaction(async (t) => {
+    if (tagline !== undefined) coach.tagline = tagline || null;
+    // De-dupe and keep the canonical beginner → advanced order.
+    if (skillLevels !== undefined) coach.skillLevels = SKILL_LEVELS.filter((l) => skillLevels.includes(l));
+    // Only persist known keys so arbitrary client JSON can't end up public.
+    if (achievements !== undefined) {
+      coach.achievements = achievements.map((a) => ({
+        title: a.title,
+        year: a.year ? Number(a.year) : null,
+        description: a.description || null,
+      }));
+    }
     if (bio !== undefined) coach.bio = bio;
     if (experienceYears !== undefined) coach.experienceYears = experienceYears;
     if (hourlyRate !== undefined) coach.hourlyRate = hourlyRate;
@@ -134,8 +162,8 @@ const updateCoach = catchAsync(async (req, res) => {
           specializations.map((s) => ({
             coachId: coach.id,
             sportCategoryId: s.sportCategoryId,
-            certification: s.certification,
-            yearsExperience: s.yearsExperience,
+            certification: s.certification || null,
+            yearsExperience: s.yearsExperience ?? 0,
           })),
           { transaction: t }
         );

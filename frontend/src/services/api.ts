@@ -1,10 +1,13 @@
 export type Role = 'admin' | 'coach' | 'client';
 
+export type SkillLevel = 'beginner' | 'novice' | 'intermediate' | 'advanced';
+export const SKILL_LEVELS: SkillLevel[] = ['beginner', 'novice', 'intermediate', 'advanced'];
+export interface Achievement { title: string; year?: number | null; description?: string | null; }
 export interface SportCategory { id: string; name: string; description?: string; icon?: string; isActive?: boolean; }
 export interface Specialization { id?: string; sportCategoryId: string; certification?: string; yearsExperience?: number; sportCategory?: SportCategory; }
-export interface CoachProfile { id: string; userId?: string; bio?: string; experienceYears?: number; hourlyRate: number; location?: string; city?: string; country?: string; averageRating?: number; totalReviews?: number; isVerified?: boolean; gcashNumber?: string; gcashAccountName?: string; specializations?: Specialization[]; }
+export interface CoachProfile { id: string; userId?: string; bio?: string; experienceYears?: number; hourlyRate: number; location?: string; city?: string; country?: string; averageRating?: number; totalReviews?: number; isVerified?: boolean; gcashNumber?: string; gcashAccountName?: string; tagline?: string | null; skillLevels?: SkillLevel[] | null; achievements?: Achievement[] | null; specializations?: Specialization[]; }
 export interface User { id: string; name: string; email: string; phone?: string; role?: { name: Role }; profileImage?: string; coachProfile?: CoachProfile; clientProfile?: Record<string, unknown>; isActive?: boolean; emailVerified?: boolean; createdAt?: string; gcashNumber?: string; gcashAccountName?: string; }
-export interface Coach { id: string; hourlyRate: number; bio?: string; city?: string; location?: string; country?: string; experienceYears?: number; averageRating?: number; totalReviews?: number; isVerified?: boolean; gcashNumber?: string; gcashAccountName?: string; user?: User; specializations?: Specialization[]; }
+export interface Coach { id: string; hourlyRate: number; bio?: string; city?: string; location?: string; country?: string; experienceYears?: number; averageRating?: number; totalReviews?: number; isVerified?: boolean; gcashNumber?: string; gcashAccountName?: string; tagline?: string | null; skillLevels?: SkillLevel[] | null; achievements?: Achievement[] | null; user?: User; specializations?: Specialization[]; }
 export interface TimeSlot { id: string; date: string; startTime: string; endTime: string; status: string; }
 export interface Availability { id: string; coachId: string; isRecurring: boolean; dayOfWeek?: number | null; specificDate?: string | null; startTime: string; endTime: string; isActive?: boolean; }
 export interface Payment { id: string; status: string; amount: number; currency?: string; provider?: string; gcashReference?: string; paymongoPaymentIntentId?: string; paidAt?: string; receiptUrl?: string; platformFeeAmount?: number; platformFeeRate?: number; platformFeeSettled?: boolean; payoutAmount?: number; payoutSettled?: boolean; booking?: Booking; }
@@ -76,10 +79,10 @@ export const api = {
   deleteSportCategory: (id: string) => request<{ message: string }>(`/sport-categories/${id}`, { method: 'DELETE' }),
 
   // ---- Coaches ----
-  coaches: (filters: Partial<{ sport: string; city: string; minPrice: number; maxPrice: number; minRating: number; date: string }> = {}) =>
+  coaches: (filters: Partial<{ sport: string; city: string; minPrice: number; maxPrice: number; minRating: number; level: SkillLevel; date: string }> = {}) =>
     request<{ data: Coach[]; meta?: { total: number } }>(`/coaches${qs(filters)}`),
   coach: (id: string) => request<{ data: Coach }>(`/coaches/${id}`),
-  updateCoach: (id: string, payload: Partial<{ bio: string; experienceYears: number; hourlyRate: number; location: string; city: string; country: string; gcashNumber: string; gcashAccountName: string; specializations: { sportCategoryId: string; certification?: string; yearsExperience?: number }[] }>) =>
+  updateCoach: (id: string, payload: Partial<{ bio: string; experienceYears: number; hourlyRate: number; location: string; city: string; country: string; gcashNumber: string; gcashAccountName: string; tagline: string; skillLevels: SkillLevel[]; achievements: Achievement[]; specializations: { sportCategoryId: string; certification?: string; yearsExperience?: number }[] }>) =>
     request<{ data: Coach }>(`/coaches/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   coachReviews: (id: string) => request<{ data: Review[] }>(`/coaches/${id}/reviews`),
 
