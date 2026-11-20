@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { Coach, Availability, TimeSlot } = require('../models');
+const { sequelize, Coach, Availability, TimeSlot, Booking } = require('../models');
 const ApiError = require('../utils/ApiError');
 const catchAsync = require('../utils/catchAsync');
 const { sendResponse } = require('../utils/ApiResponse');
@@ -80,6 +80,34 @@ const deleteAvailability = catchAsync(async (req, res) => {
   sendResponse(res, 200, 'Availability window deleted');
 });
 
+// DELETE /api/coaches/time-slots/:id — coach removes a single open slot.
+// Booked slots are refused (cancel the booking first). A slot still
+// referenced by an old cancelled booking can't be hard-deleted (FK is
+// RESTRICT), so it's marked 'blocked' instead — which hides it everywhere
+// just the same, since only 'available' slots are ever listed.
+const deleteTimeSlot = catchAsync(async (req, res) => {
+  const result = await sequelize.transaction(async (t) => {
+    const slot = await TimeSlot.findByPk(req.params.id, { transaction: t, lock: t.LOCK.UPDATE });
+    if (!slot) throw ApiError.notFound('Time slot not found');
+    await getCoachForActor(req, slot.coachId);
+
+    if (slot.status === 'booked') {
+      throw ApiError.conflict('This slot has a booking — cancel the booking before removing the slot');
+    }
+
+    const hasBookingHistory = await Booking.count({ where: { timeSlotId: slot.id }, transaction: t });
+    if (hasBookingHistory) {
+      slot.status = 'blocked';
+      await slot.save({ transaction: t });
+      return 'blocked';
+    }
+    await slot.destroy({ transaction: t });
+    return 'deleted';
+  });
+
+  sendResponse(res, 200, 'Time slot removed', { id: req.params.id, result });
+});
+
 // POST /api/coaches/availability/:id/generate-slots
 // Materializes bookable TimeSlot rows for a date range from a recurring rule.
 // Kept as an explicit action (rather than an implicit cron) so coaches control
@@ -134,5 +162,6 @@ module.exports = {
   createAvailability,
   updateAvailability,
   deleteAvailability,
+  deleteTimeSlot,
   generateSlots,
 };

@@ -7,7 +7,7 @@ const authorize = require('../middleware/role.middleware');
 const validate = require('../middleware/validate.middleware');
 const upload = require('../middleware/upload.middleware');
 const { updateCoachRules, listCoachesRules, coachIdParamRule } = require('../validators/coach.validator');
-const { createAvailabilityRules, availabilityIdParamRule } = require('../validators/availability.validator');
+const { createAvailabilityRules, availabilityIdParamRule, timeSlotIdParamRule } = require('../validators/availability.validator');
 
 const router = express.Router();
 
@@ -41,6 +41,14 @@ router.delete(
   availabilityIdParamRule,
   validate,
   availabilityController.deleteAvailability
+);
+router.delete(
+  '/time-slots/:id',
+  authenticate,
+  authorize('coach', 'admin'),
+  timeSlotIdParamRule,
+  validate,
+  availabilityController.deleteTimeSlot
 );
 router.post(
   '/availability/:id/generate-slots',

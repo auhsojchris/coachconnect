@@ -22,5 +22,6 @@ const createAvailabilityRules = [
 ];
 
 const availabilityIdParamRule = [param('id').isUUID().withMessage('Invalid availability id')];
+const timeSlotIdParamRule = [param('id').isUUID().withMessage('Invalid time slot id')];
 
-module.exports = { createAvailabilityRules, availabilityIdParamRule };
+module.exports = { createAvailabilityRules, availabilityIdParamRule, timeSlotIdParamRule };

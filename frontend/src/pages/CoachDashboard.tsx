@@ -33,6 +33,8 @@ export function CoachAvailability() {
   const [genTo, setGenTo] = useState('');
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
+  const [deletingSlot, setDeletingSlot] = useState<string | null>(null);
+  const [slotError, setSlotError] = useState('');
 
   const refresh = (coachId: string) => api.availability(coachId).then((r) => { setRules(r.data.recurringRules); setSlots(r.data.timeSlots); });
 
@@ -55,6 +57,18 @@ export function CoachAvailability() {
   };
 
   const removeRule = async (id: string) => { await api.deleteAvailability(id); await refresh(coach.id); };
+
+  const removeSlot = async (slot: TimeSlot) => {
+    if (!window.confirm(`Delete the ${slot.date} ${slot.startTime.slice(0, 5)}–${slot.endTime.slice(0, 5)} slot? Athletes will no longer be able to book it.`)) return;
+    setDeletingSlot(slot.id);
+    setSlotError('');
+    try {
+      await api.deleteTimeSlot(slot.id);
+      setSlots((current) => current.filter((s) => s.id !== slot.id));
+    } catch (err) {
+      setSlotError(err instanceof Error ? err.message : 'Could not delete that slot.');
+    } finally { setDeletingSlot(null); }
+  };
 
   const generate = async (ruleId: string) => {
     if (!genFrom || !genTo) { setMessage('Pick a from/to date range first.'); return; }
@@ -131,10 +145,18 @@ export function CoachAvailability() {
 
     <div className="dash-panel">
       <p className="eyebrow" style={{ marginBottom: 14 }}>UPCOMING SLOTS</p>
+      {slotError && <p className="error-text" style={{ marginBottom: 12 }}>{slotError}</p>}
       {slots.length === 0 ? <p className="muted">No open or booked slots yet — generate some above.</p> : (
         <table className="data-table">
-          <thead><tr><th>Date</th><th>Time</th><th>Status</th></tr></thead>
-          <tbody>{slots.slice(0, 30).map((s) => <tr key={s.id}><td>{s.date}</td><td className="mono">{s.startTime}–{s.endTime}</td><td><span className={`badge-status ${s.status}`}>{s.status}</span></td></tr>)}</tbody>
+          <thead><tr><th>Date</th><th>Time</th><th>Status</th><th></th></tr></thead>
+          <tbody>{slots.slice(0, 30).map((s) => <tr key={s.id}>
+            <td>{s.date}</td>
+            <td className="mono">{s.startTime.slice(0, 5)}–{s.endTime.slice(0, 5)}</td>
+            <td><span className={`badge-status ${s.status}`}>{s.status}</span></td>
+            <td style={{ textAlign: 'right' }}>
+              <button className="btn-outline danger" type="button" disabled={deletingSlot === s.id} onClick={() => removeSlot(s)} aria-label={`Delete slot ${s.date} ${s.startTime.slice(0, 5)}`} title="Delete slot"><Trash2 size={14} /></button>
+            </td>
+          </tr>)}</tbody>
         </table>
       )}
     </div>

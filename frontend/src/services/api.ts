@@ -91,6 +91,7 @@ export const api = {
   createAvailability: (payload: { coachId: string; isRecurring: boolean; dayOfWeek?: number; specificDate?: string; startTime: string; endTime: string }) =>
     request<{ data: Availability }>('/coaches/availability', { method: 'POST', body: JSON.stringify(payload) }),
   deleteAvailability: (id: string) => request<{ message: string }>(`/coaches/availability/${id}`, { method: 'DELETE' }),
+  deleteTimeSlot: (id: string) => request<{ data: { id: string; result: 'deleted' | 'blocked' } }>(`/coaches/time-slots/${id}`, { method: 'DELETE' }),
   generateSlots: (id: string, payload: { from: string; to: string; slotDurationMinutes?: number }) =>
     request<{ data: { count: number } }>(`/coaches/availability/${id}/generate-slots`, { method: 'POST', body: JSON.stringify(payload) }),
 
