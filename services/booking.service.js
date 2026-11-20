@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const { sequelize, TimeSlot, Booking, Coach } = require('../models');
 const ApiError = require('../utils/ApiError');
 
@@ -24,47 +25,70 @@ function calculateSessionPrice(hourlyRate, startTime, endTime) {
  * (coach_id, date, start_time) as a second line of defense.
  */
 async function createBooking({ clientId, coachId, timeSlotId, sportCategoryId, notes }) {
+  const [booking] = await createBookings({ clientId, coachId, timeSlotIds: [timeSlotId], sportCategoryId, notes });
+  return booking;
+}
+
+/**
+ * Books several of one coach's slots at once, all-or-nothing: if any slot is
+ * gone, in the past, or not this coach's, nothing is booked. Same locking
+ * guarantee as above, applied to every slot. Slots are locked in id order so
+ * two overlapping multi-slot requests can't deadlock each other.
+ *
+ * When more than one slot is booked, the bookings share a checkoutId so the
+ * client pays for them together in a single checkout.
+ */
+async function createBookings({ clientId, coachId, timeSlotIds, sportCategoryId, notes }) {
+  const ids = [...new Set(timeSlotIds)].sort();
+  if (!ids.length) throw ApiError.badRequest('Choose at least one time slot');
+
   return sequelize.transaction(async (t) => {
-    const timeSlot = await TimeSlot.findOne({
-      where: { id: timeSlotId, coachId },
-      transaction: t,
-      lock: t.LOCK.UPDATE,
-    });
-
-    if (!timeSlot) {
-      throw ApiError.notFound('Time slot not found for this coach');
-    }
-    if (timeSlot.status !== 'available') {
-      throw ApiError.conflict('This time slot is no longer available');
-    }
-
-    const slotDateTime = new Date(`${timeSlot.date}T${timeSlot.startTime}`);
-    if (slotDateTime < new Date()) {
-      throw ApiError.badRequest('Cannot book a time slot in the past');
-    }
-
     const coach = await Coach.findByPk(coachId, { transaction: t });
     if (!coach) throw ApiError.notFound('Coach not found');
 
-    const price = calculateSessionPrice(coach.hourlyRate, timeSlot.startTime, timeSlot.endTime);
+    const slots = await TimeSlot.findAll({
+      where: { id: ids, coachId },
+      order: [['id', 'ASC']],
+      transaction: t,
+      lock: t.LOCK.UPDATE,
+    });
+    if (slots.length !== ids.length) {
+      throw ApiError.notFound(ids.length > 1 ? 'One or more time slots were not found for this coach' : 'Time slot not found for this coach');
+    }
 
-    timeSlot.status = 'booked';
-    await timeSlot.save({ transaction: t });
+    const now = new Date();
+    for (const slot of slots) {
+      const when = `${slot.date} ${String(slot.startTime).slice(0, 5)}`;
+      if (slot.status !== 'available') {
+        throw ApiError.conflict(ids.length > 1 ? `The ${when} slot is no longer available` : 'This time slot is no longer available');
+      }
+      if (new Date(`${slot.date}T${slot.startTime}`) < now) {
+        throw ApiError.badRequest(ids.length > 1 ? `The ${when} slot is in the past` : 'Cannot book a time slot in the past');
+      }
+    }
 
-    const booking = await Booking.create(
-      {
-        clientId,
-        coachId,
-        timeSlotId,
-        sportCategoryId,
-        price,
-        notes,
-        status: 'pending',
-      },
-      { transaction: t }
-    );
-
-    return booking;
+    const checkoutId = slots.length > 1 ? crypto.randomUUID() : null;
+    const bookings = [];
+    for (const slot of slots) {
+      slot.status = 'booked';
+      await slot.save({ transaction: t });
+      bookings.push(
+        await Booking.create(
+          {
+            clientId,
+            coachId,
+            timeSlotId: slot.id,
+            sportCategoryId,
+            price: calculateSessionPrice(coach.hourlyRate, slot.startTime, slot.endTime),
+            notes,
+            status: 'pending',
+            checkoutId,
+          },
+          { transaction: t }
+        )
+      );
+    }
+    return bookings;
   });
 }
 
@@ -148,4 +172,4 @@ async function rescheduleBooking(bookingId, newTimeSlotId) {
   });
 }
 
-module.exports = { calculateSessionPrice, createBooking, cancelBooking, rescheduleBooking };
+module.exports = { calculateSessionPrice, createBooking, createBookings, cancelBooking, rescheduleBooking };

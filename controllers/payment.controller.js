@@ -21,10 +21,16 @@ async function assertOwnsPayment(req, payment) {
   throw ApiError.forbidden('You do not have access to this payment');
 }
 
-// POST /api/payments — create a Stripe PaymentIntent for a booking
-const createPayment = catchAsync(async (req, res) => {
-  const { bookingId } = req.body;
+const roundMoney = (n) => Math.round(Number(n) * 100) / 100;
 
+/**
+ * Resolves what a checkout started from `bookingId` actually pays for. A
+ * booking created alone pays for itself. A booking from a multi-slot request
+ * pays for every still-pending, still-unpaid booking sharing its checkoutId,
+ * so one payment covers all of them. Sessions cancelled before payment just
+ * drop out of the total.
+ */
+async function loadCheckout(req, bookingId) {
   const booking = await Booking.findByPk(bookingId);
   if (!booking) throw ApiError.notFound('Booking not found');
   if (booking.clientId !== req.user.id && req.user.role.name !== 'admin') {
@@ -34,34 +40,66 @@ const createPayment = catchAsync(async (req, res) => {
     throw ApiError.conflict('Only pending bookings can be paid for');
   }
 
-  const existingPayment = await Payment.findOne({ where: { bookingId } });
-  if (existingPayment && existingPayment.status === 'paid') {
-    throw ApiError.conflict('This booking has already been paid for');
+  const candidates = booking.checkoutId
+    ? await Booking.findAll({
+        where: { checkoutId: booking.checkoutId, clientId: booking.clientId, status: 'pending' },
+        order: [['createdAt', 'ASC']],
+      })
+    : [booking];
+
+  const existing = await Payment.findAll({ where: { bookingId: candidates.map((b) => b.id) } });
+  const paymentByBooking = new Map(existing.map((p) => [p.bookingId, p]));
+  const bookings = candidates.filter((b) => paymentByBooking.get(b.id)?.status !== 'paid');
+  if (!bookings.length) throw ApiError.conflict('This booking has already been paid for');
+
+  return {
+    booking,
+    bookings,
+    paymentByBooking,
+    total: roundMoney(bookings.reduce((sum, b) => sum + Number(b.price), 0)),
+  };
+}
+
+/** Creates or updates the Payment row for each booking in a checkout. */
+async function upsertCheckoutPayments({ bookings, paymentByBooking }, fieldsFor) {
+  const payments = [];
+  for (const b of bookings) {
+    const fields = { amount: b.price, ...fieldsFor(b) };
+    const existing = paymentByBooking.get(b.id);
+    payments.push(existing ? await existing.update(fields) : await Payment.create({ bookingId: b.id, ...fields }));
   }
+  return payments;
+}
+
+/** Platform commission and coach payout for one booking's price. */
+function splitFee(price) {
+  const platformFeeAmount = roundMoney(Number(price) * PLATFORM_FEE_RATE);
+  return { platformFeeAmount, payoutAmount: roundMoney(Number(price) - platformFeeAmount) };
+}
+
+// POST /api/payments — create a Stripe PaymentIntent for a booking (or for
+// every booking in its multi-session checkout)
+const createPayment = catchAsync(async (req, res) => {
+  const checkout = await loadCheckout(req, req.body.bookingId);
 
   const paymentIntent = await paymentService.createPaymentIntent({
-    amount: booking.price,
+    amount: checkout.total,
     currency: process.env.STRIPE_CURRENCY,
-    bookingId: booking.id,
+    bookingId: checkout.booking.id,
     user: req.user,
   });
 
-  const payment = existingPayment
-    ? await existingPayment.update({
-        amount: booking.price,
-        status: 'pending',
-        stripePaymentIntentId: paymentIntent.id,
-      })
-    : await Payment.create({
-        bookingId,
-        amount: booking.price,
-        currency: process.env.STRIPE_CURRENCY || 'usd',
-        status: 'pending',
-        stripePaymentIntentId: paymentIntent.id,
-      });
+  const payments = await upsertCheckoutPayments(checkout, () => ({
+    currency: process.env.STRIPE_CURRENCY || 'usd',
+    provider: 'stripe',
+    status: 'pending',
+    stripePaymentIntentId: paymentIntent.id,
+  }));
 
   sendResponse(res, 201, 'Payment initiated', {
-    payment,
+    payment: payments[0],
+    payments,
+    total: checkout.total,
     clientSecret: paymentIntent.client_secret,
   });
 });
@@ -122,31 +160,23 @@ const PLATFORM_FEE_RATE = Number(process.env.PLATFORM_FEE_RATE) || 0.1;
 // Scoped to the booking's own client/admin so a coach's personal GCash
 // number never leaks publicly.
 const getGcashInfo = catchAsync(async (req, res) => {
-  const booking = await Booking.findByPk(req.params.bookingId);
-  if (!booking) throw ApiError.notFound('Booking not found');
-  if (booking.clientId !== req.user.id && req.user.role.name !== 'admin') {
-    throw ApiError.forbidden('You do not have access to this booking');
-  }
+  const checkout = await loadCheckout(req, req.params.bookingId);
+  const summary = { amount: checkout.total, sessionCount: checkout.bookings.length, platformFeeRate: PLATFORM_FEE_RATE };
 
   const paymongoConfigured = paymongoService.isPaymongoConfigured();
   if (paymongoConfigured) {
-    return sendResponse(res, 200, 'GCash info retrieved', {
-      number: '',
-      accountName: '',
-      platformFeeRate: PLATFORM_FEE_RATE,
-      paymongoConfigured: true,
-    });
+    return sendResponse(res, 200, 'GCash info retrieved', { ...summary, number: '', accountName: '', paymongoConfigured: true });
   }
 
-  const coach = await Coach.findByPk(booking.coachId, { attributes: ['id', 'gcashNumber', 'gcashAccountName'] });
+  const coach = await Coach.findByPk(checkout.booking.coachId, { attributes: ['id', 'gcashNumber', 'gcashAccountName'] });
   if (!coach || !coach.gcashNumber) {
     throw ApiError.badRequest('This coach has not set up GCash payments yet');
   }
 
   sendResponse(res, 200, 'GCash info retrieved', {
+    ...summary,
     number: coach.gcashNumber,
     accountName: coach.gcashAccountName || '',
-    platformFeeRate: PLATFORM_FEE_RATE,
     paymongoConfigured: false,
   });
 });
@@ -156,60 +186,28 @@ const getGcashInfo = catchAsync(async (req, res) => {
 // in the platform's PayMongo balance (not the coach's), and a webhook
 // confirms it — no reference number, no waiting on the coach to confirm.
 const startGcashCheckout = catchAsync(async (req, res) => {
-  const { bookingId } = req.body;
-
-  const booking = await Booking.findByPk(bookingId);
-  if (!booking) throw ApiError.notFound('Booking not found');
-  if (booking.clientId !== req.user.id && req.user.role.name !== 'admin') {
-    throw ApiError.forbidden('You do not have access to this booking');
-  }
-  if (booking.status !== 'pending') {
-    throw ApiError.conflict('Only pending bookings can be paid for');
-  }
-
-  const existingPayment = await Payment.findOne({ where: { bookingId } });
-  if (existingPayment && existingPayment.status === 'paid') {
-    throw ApiError.conflict('This booking has already been paid for');
-  }
-
-  const platformFeeAmount = Math.round(Number(booking.price) * PLATFORM_FEE_RATE * 100) / 100;
-  const payoutAmount = Math.round((Number(booking.price) - platformFeeAmount) * 100) / 100;
+  const checkout = await loadCheckout(req, req.body.bookingId);
+  const { booking, bookings } = checkout;
   const returnUrl = `${process.env.CLIENT_URL}/payment-return?bookingId=${booking.id}`;
 
   const { paymentIntentId, redirectUrl } = await paymongoService.createGcashCheckout({
-    amount: booking.price,
-    description: `Booking ${booking.id}`,
+    amount: checkout.total,
+    description: bookings.length > 1 ? `${bookings.length} coaching sessions (checkout ${booking.checkoutId})` : `Booking ${booking.id}`,
     bookingId: booking.id,
     returnUrl,
   });
 
-  if (existingPayment) {
-    await existingPayment.update({
-      provider: 'paymongo',
-      status: 'pending',
-      paymongoPaymentIntentId: paymentIntentId,
-      amount: booking.price,
-      currency: 'php',
-      platformFeeAmount,
-      platformFeeRate: PLATFORM_FEE_RATE,
-      payoutAmount,
-      payoutSettled: false,
-    });
-  } else {
-    await Payment.create({
-      bookingId,
-      amount: booking.price,
-      currency: 'php',
-      status: 'pending',
-      provider: 'paymongo',
-      paymongoPaymentIntentId: paymentIntentId,
-      platformFeeAmount,
-      platformFeeRate: PLATFORM_FEE_RATE,
-      payoutAmount,
-    });
-  }
+  await upsertCheckoutPayments(checkout, (b) => ({
+    provider: 'paymongo',
+    status: 'pending',
+    paymongoPaymentIntentId: paymentIntentId,
+    currency: 'php',
+    platformFeeRate: PLATFORM_FEE_RATE,
+    ...splitFee(b.price),
+    payoutSettled: false,
+  }));
 
-  sendResponse(res, 201, 'GCash checkout started', { redirectUrl });
+  sendResponse(res, 201, 'GCash checkout started', { redirectUrl, total: checkout.total, sessionCount: bookings.length });
 });
 
 // GET /api/payments/platform-gcash-account — where a coach should send their
@@ -228,95 +226,111 @@ const getPlatformGcashAccount = catchAsync(async (req, res) => {
 // the coach's own number. The platform's cut is recorded as a commission the
 // coach owes (visible to admin), not deducted from what the client sends.
 const submitGcashPayment = catchAsync(async (req, res) => {
-  const { bookingId, referenceNumber } = req.body;
+  const { referenceNumber } = req.body;
+  const checkout = await loadCheckout(req, req.body.bookingId);
 
-  const booking = await Booking.findByPk(bookingId);
-  if (!booking) throw ApiError.notFound('Booking not found');
-  if (booking.clientId !== req.user.id && req.user.role.name !== 'admin') {
-    throw ApiError.forbidden('You do not have access to this booking');
-  }
-  if (booking.status !== 'pending') {
-    throw ApiError.conflict('Only pending bookings can be paid for');
-  }
+  // One GCash transfer covers every session in the checkout, so they all
+  // carry the same reference and are confirmed/rejected together.
+  const payments = await upsertCheckoutPayments(checkout, (b) => ({
+    provider: 'gcash',
+    status: 'submitted',
+    gcashReference: referenceNumber,
+    currency: 'php',
+    platformFeeAmount: splitFee(b.price).platformFeeAmount,
+    platformFeeRate: PLATFORM_FEE_RATE,
+    platformFeeSettled: false,
+  }));
 
-  const existingPayment = await Payment.findOne({ where: { bookingId } });
-  if (existingPayment && existingPayment.status === 'paid') {
-    throw ApiError.conflict('This booking has already been paid for');
-  }
+  const coach = await Coach.findByPk(checkout.booking.coachId);
+  if (coach) await notificationService.notifyGcashSubmitted(payments[0], coach.userId);
 
-  const platformFeeAmount = Math.round(Number(booking.price) * PLATFORM_FEE_RATE * 100) / 100;
-
-  const payment = existingPayment
-    ? await existingPayment.update({
-        provider: 'gcash',
-        status: 'submitted',
-        gcashReference: referenceNumber,
-        amount: booking.price,
-        platformFeeAmount,
-        platformFeeRate: PLATFORM_FEE_RATE,
-        platformFeeSettled: false,
-      })
-    : await Payment.create({
-        bookingId,
-        amount: booking.price,
-        currency: process.env.STRIPE_CURRENCY || 'usd',
-        status: 'submitted',
-        provider: 'gcash',
-        gcashReference: referenceNumber,
-        platformFeeAmount,
-        platformFeeRate: PLATFORM_FEE_RATE,
-      });
-
-  const coach = await Coach.findByPk(booking.coachId);
-  if (coach) await notificationService.notifyGcashSubmitted(payment, coach.userId);
-
-  sendResponse(res, 201, 'GCash payment submitted — waiting for your coach to confirm receipt', payment);
+  sendResponse(res, 201, 'GCash payment submitted — waiting for your coach to confirm receipt', payments[0]);
 });
 
 // Loads a payment for the GCash confirm/reject actions, checking it's an
 // unresolved GCash submission the requester (its coach, or an admin) owns.
-async function loadOwnedGcashPayment(req) {
+// Returns it together with any sibling payments from the same multi-session
+// checkout that were paid with the same GCash transfer.
+async function loadOwnedGcashPayments(req) {
   const payment = await Payment.findByPk(req.params.id, { include: paymentInclude });
   if (!payment) throw ApiError.notFound('Payment not found');
   if (payment.provider !== 'gcash') throw ApiError.badRequest('This payment was not made via GCash');
   if (payment.status !== 'submitted') throw ApiError.conflict('This payment has already been resolved');
-  if (req.user.role.name === 'admin') return payment;
-  if (req.user.role.name === 'coach') {
+
+  let allowed = req.user.role.name === 'admin';
+  if (!allowed && req.user.role.name === 'coach') {
     const coach = await Coach.findOne({ where: { userId: req.user.id } });
-    if (coach && payment.booking.coachId === coach.id) return payment;
+    allowed = !!coach && payment.booking.coachId === coach.id;
   }
-  throw ApiError.forbidden('You do not have access to this payment');
+  if (!allowed) throw ApiError.forbidden('You do not have access to this payment');
+
+  if (!payment.booking.checkoutId) return [payment];
+  return Payment.findAll({
+    where: { provider: 'gcash', status: 'submitted', gcashReference: payment.gcashReference },
+    include: [{ model: Booking, as: 'booking', required: true, where: { checkoutId: payment.booking.checkoutId } }],
+  });
 }
 
 // PUT /api/payments/:id/confirm-gcash — coach/admin confirms the money arrived
 const confirmGcashPayment = catchAsync(async (req, res) => {
-  const payment = await loadOwnedGcashPayment(req);
+  const payments = await loadOwnedGcashPayments(req);
 
   await sequelize.transaction(async (t) => {
-    payment.status = 'paid';
-    payment.paidAt = new Date();
-    await payment.save({ transaction: t });
-    payment.booking.status = 'confirmed';
-    await payment.booking.save({ transaction: t });
+    for (const payment of payments) {
+      payment.status = 'paid';
+      payment.paidAt = new Date();
+      await payment.save({ transaction: t });
+      payment.booking.status = 'confirmed';
+      await payment.booking.save({ transaction: t });
+    }
   });
 
-  await notificationService.notifyPaymentReceived(payment, payment.booking.clientId);
-  const client = await User.findByPk(payment.booking.clientId);
-  if (client) await sendBookingReceiptEmail(client, payment.booking, payment);
-
-  sendResponse(res, 200, 'GCash payment confirmed', payment);
+  await notifyPaid(payments);
+  sendResponse(res, 200, payments.length > 1 ? `GCash payment confirmed for ${payments.length} sessions` : 'GCash payment confirmed', payments[0]);
 });
 
 // PUT /api/payments/:id/reject-gcash — coach/admin couldn't verify the payment
 const rejectGcashPayment = catchAsync(async (req, res) => {
-  const payment = await loadOwnedGcashPayment(req);
-  payment.status = 'failed';
-  await payment.save();
+  const payments = await loadOwnedGcashPayments(req);
+  await sequelize.transaction(async (t) => {
+    for (const payment of payments) {
+      payment.status = 'failed';
+      await payment.save({ transaction: t });
+    }
+  });
 
-  await notificationService.notifyGcashRejected(payment, payment.booking.clientId);
+  await notificationService.notifyGcashRejected(payments[0], payments[0].booking.clientId);
 
-  sendResponse(res, 200, 'GCash payment rejected', payment);
+  sendResponse(res, 200, 'GCash payment rejected', payments[0]);
 });
+
+/**
+ * In-app notification + receipt email for payments that just succeeded. A
+ * multi-session checkout gets one notification (not one per session) but a
+ * receipt per booking, since each receipt describes a specific session.
+ */
+async function notifyPaid(payments, { notifyCoachPayout = false } = {}) {
+  if (!payments.length) return;
+  const first = payments[0];
+  // Notification messages read amount/payoutAmount off the payment, so hand
+  // them the checkout's combined totals rather than one session's share.
+  const combined = {
+    id: first.id,
+    bookingId: first.bookingId,
+    currency: first.currency,
+    amount: roundMoney(payments.reduce((s, p) => s + Number(p.amount), 0)),
+    payoutAmount: roundMoney(payments.reduce((s, p) => s + Number(p.payoutAmount || 0), 0)),
+  };
+  await notificationService.notifyPaymentReceived(combined, first.booking.clientId);
+  const client = await User.findByPk(first.booking.clientId);
+  if (client) {
+    for (const p of payments) await sendBookingReceiptEmail(client, p.booking, p);
+  }
+  if (notifyCoachPayout) {
+    const coach = await Coach.findByPk(first.booking.coachId);
+    if (coach) await notificationService.notifyPayoutPending(combined, coach.userId);
+  }
+}
 
 // POST /api/payments/methods/setup-intent — start saving a new card
 const createSetupIntent = catchAsync(async (req, res) => {
@@ -367,34 +381,32 @@ const handleStripeWebhook = catchAsync(async (req, res) => {
 
   if (event.type === 'payment_intent.succeeded' || event.type === 'payment_intent.payment_failed') {
     const intent = event.data.object;
-    const payment = await Payment.findOne({
-      where: { stripePaymentIntentId: intent.id },
+    // One intent can cover several bookings (multi-session checkout).
+    const payments = await Payment.findAll({
+      where: { stripePaymentIntentId: intent.id, status: { [Op.ne]: 'paid' } },
       include: [{ model: Booking, as: 'booking' }],
     });
 
-    if (payment) {
+    if (payments.length) {
+      const succeeded = event.type === 'payment_intent.succeeded';
       await sequelize.transaction(async (t) => {
-        if (event.type === 'payment_intent.succeeded') {
-          payment.status = 'paid';
-          payment.paidAt = new Date();
-          payment.receiptUrl = intent.charges?.data?.[0]?.receipt_url || payment.receiptUrl;
-          await payment.save({ transaction: t });
-
-          payment.booking.status = 'confirmed';
-          await payment.booking.save({ transaction: t });
-        } else {
-          payment.status = 'failed';
-          await payment.save({ transaction: t });
+        for (const payment of payments) {
+          if (succeeded) {
+            payment.status = 'paid';
+            payment.paidAt = new Date();
+            payment.receiptUrl = intent.charges?.data?.[0]?.receipt_url || payment.receiptUrl;
+            await payment.save({ transaction: t });
+            payment.booking.status = 'confirmed';
+            await payment.booking.save({ transaction: t });
+          } else {
+            payment.status = 'failed';
+            await payment.save({ transaction: t });
+          }
         }
       });
 
-      const client = await User.findByPk(payment.booking.clientId);
-      if (event.type === 'payment_intent.succeeded') {
-        await notificationService.notifyPaymentReceived(payment, payment.booking.clientId);
-        if (client) await sendBookingReceiptEmail(client, payment.booking, payment);
-      } else {
-        await notificationService.notifyPaymentFailed(payment, payment.booking.clientId);
-      }
+      if (succeeded) await notifyPaid(payments);
+      else await notificationService.notifyPaymentFailed(payments[0], payments[0].booking.clientId);
     }
   }
 
@@ -420,35 +432,31 @@ const handlePaymongoWebhook = catchAsync(async (req, res) => {
   const paymentIntentId = paymentAttributes?.payment_intent_id;
 
   if ((eventType === 'payment.paid' || eventType === 'payment.failed') && paymentIntentId) {
-    const payment = await Payment.findOne({
-      where: { paymongoPaymentIntentId: paymentIntentId },
+    // One intent can cover several bookings (multi-session checkout).
+    const payments = await Payment.findAll({
+      where: { paymongoPaymentIntentId: paymentIntentId, status: { [Op.ne]: 'paid' } },
       include: [{ model: Booking, as: 'booking' }],
     });
 
-    if (payment && payment.status !== 'paid') {
+    if (payments.length) {
+      const paid = eventType === 'payment.paid';
       await sequelize.transaction(async (t) => {
-        if (eventType === 'payment.paid') {
-          payment.status = 'paid';
-          payment.paidAt = new Date();
-          await payment.save({ transaction: t });
-
-          payment.booking.status = 'confirmed';
-          await payment.booking.save({ transaction: t });
-        } else {
-          payment.status = 'failed';
-          await payment.save({ transaction: t });
+        for (const payment of payments) {
+          if (paid) {
+            payment.status = 'paid';
+            payment.paidAt = new Date();
+            await payment.save({ transaction: t });
+            payment.booking.status = 'confirmed';
+            await payment.booking.save({ transaction: t });
+          } else {
+            payment.status = 'failed';
+            await payment.save({ transaction: t });
+          }
         }
       });
 
-      const client = await User.findByPk(payment.booking.clientId);
-      if (eventType === 'payment.paid') {
-        await notificationService.notifyPaymentReceived(payment, payment.booking.clientId);
-        if (client) await sendBookingReceiptEmail(client, payment.booking, payment);
-        const coach = await Coach.findByPk(payment.booking.coachId);
-        if (coach) await notificationService.notifyPayoutPending(payment, coach.userId);
-      } else {
-        await notificationService.notifyPaymentFailed(payment, payment.booking.clientId);
-      }
+      if (paid) await notifyPaid(payments, { notifyCoachPayout: true });
+      else await notificationService.notifyPaymentFailed(payments[0], payments[0].booking.clientId);
     }
   }
 

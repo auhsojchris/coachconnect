@@ -97,6 +97,34 @@ const createBooking = catchAsync(async (req, res) => {
   sendResponse(res, 201, 'Booking created, awaiting payment confirmation', full);
 });
 
+// POST /api/bookings/batch — book several of one coach's slots in one go.
+// All-or-nothing; the bookings share a checkoutId and are paid together.
+const createBookingsBatch = catchAsync(async (req, res) => {
+  if (req.user.role.name !== 'client') throw ApiError.forbidden('Only clients can create bookings');
+
+  const { coachId, timeSlotIds, sportCategoryId, notes } = req.body;
+  const created = await bookingService.createBookings({
+    clientId: req.user.id,
+    coachId,
+    timeSlotIds,
+    sportCategoryId,
+    notes,
+  });
+
+  const bookings = await Booking.findAll({
+    where: { id: created.map((b) => b.id) },
+    include: bookingInclude,
+    order: [[{ model: TimeSlot, as: 'timeSlot' }, 'date', 'ASC'], [{ model: TimeSlot, as: 'timeSlot' }, 'startTime', 'ASC']],
+  });
+  const total = bookings.reduce((sum, b) => sum + Number(b.price), 0);
+
+  sendResponse(res, 201, `${bookings.length} session(s) booked, awaiting payment`, {
+    checkoutId: created[0].checkoutId,
+    total: Math.round(total * 100) / 100,
+    bookings,
+  });
+});
+
 // PUT /api/bookings/:id — coach/admin updates status (confirm, complete)
 const updateBooking = catchAsync(async (req, res) => {
   const booking = await loadBookingOr404(req.params.id);
@@ -167,6 +195,7 @@ module.exports = {
   listBookings,
   getBookingById,
   createBooking,
+  createBookingsBatch,
   updateBooking,
   cancelBooking,
   rescheduleBooking,

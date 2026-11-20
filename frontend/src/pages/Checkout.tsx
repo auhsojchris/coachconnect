@@ -30,11 +30,12 @@ function PayForm({ onDone }: { onDone: () => void }) {
 
 function CardCheckout({ bookingId, onDone }: { bookingId: string; onDone: () => void }) {
   const [clientSecret, setClientSecret] = useState('');
+  const [summary, setSummary] = useState<{ total: number; count: number } | null>(null);
   const [error, setError] = useState('');
 
   useEffect(() => {
     api.createPayment(bookingId)
-      .then((r) => setClientSecret(r.data.clientSecret))
+      .then((r) => { setClientSecret(r.data.clientSecret); setSummary({ total: r.data.total, count: r.data.payments?.length || 1 }); })
       .catch((e) => setError(e instanceof Error ? e.message : 'Could not start checkout.'));
   }, [bookingId]);
 
@@ -43,6 +44,7 @@ function CardCheckout({ bookingId, onDone }: { bookingId: string; onDone: () => 
   if (!clientSecret) return <p className="form-message">Preparing checkout…</p>;
 
   return <Elements stripe={stripePromise} options={{ clientSecret, appearance: { variables: { colorPrimary: '#FF5A36', fontFamily: 'Manrope, sans-serif' } } }}>
+    {summary && <p style={{ fontWeight: 700, marginBottom: 12 }}>Total: ₱{summary.total.toLocaleString()}{summary.count > 1 ? ` for ${summary.count} sessions` : ''}</p>}
     <PayForm onDone={onDone} />
   </Elements>;
 }
@@ -50,7 +52,7 @@ function CardCheckout({ bookingId, onDone }: { bookingId: string; onDone: () => 
 function FeeBreakdown({ price, feeRate, feeLabel, footnote }: { price: number; feeRate: number; feeLabel: string; footnote: string }) {
   const fee = Math.round(price * feeRate * 100) / 100;
   return <div style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 14, marginBottom: 10, fontSize: '.85rem' }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}><span className="muted">Session price</span><span className="mono">₱{price.toLocaleString()}</span></div>
+    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}><span className="muted">Price</span><span className="mono">₱{price.toLocaleString()}</span></div>
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
       <span className="muted">Platform fee ({(feeRate * 100).toFixed(0)}%, {feeLabel})</span>
       <span className="mono muted">− ₱{fee.toLocaleString()}</span>
@@ -126,8 +128,12 @@ function ManualGcashCheckout({ bookingId, price, feeRate, number, accountName, o
   </form>;
 }
 
+function SessionCountNote({ count }: { count: number }) {
+  return <p className="form-message" style={{ marginBottom: 10 }}>This payment covers all {count} sessions in your checkout.</p>;
+}
+
 function GcashCheckout({ bookingId, amount, onDone }: { bookingId: string; amount?: number; onDone: () => void }) {
-  const [info, setInfo] = useState<{ number: string; accountName: string; platformFeeRate: number; paymongoConfigured: boolean } | null>(null);
+  const [info, setInfo] = useState<{ number: string; accountName: string; platformFeeRate: number; paymongoConfigured: boolean; amount: number; sessionCount: number } | null>(null);
   const [infoError, setInfoError] = useState('');
 
   useEffect(() => {
@@ -139,10 +145,11 @@ function GcashCheckout({ bookingId, amount, onDone }: { bookingId: string; amoun
   if (infoError) return <p className="error-text">{infoError}</p>;
   if (!info) return <p className="form-message">Loading GCash details…</p>;
 
-  const price = amount ?? 0;
+  // The server resolves the whole multi-session checkout, so its total wins.
+  const price = Number(info.amount ?? amount ?? 0);
   return info.paymongoConfigured
-    ? <AutomaticGcashCheckout bookingId={bookingId} price={price} feeRate={info.platformFeeRate} />
-    : <ManualGcashCheckout bookingId={bookingId} price={price} feeRate={info.platformFeeRate} number={info.number} accountName={info.accountName} onDone={onDone} />;
+    ? <>{info.sessionCount > 1 && <SessionCountNote count={info.sessionCount} />}<AutomaticGcashCheckout bookingId={bookingId} price={price} feeRate={info.platformFeeRate} /></>
+    : <>{info.sessionCount > 1 && <SessionCountNote count={info.sessionCount} />}<ManualGcashCheckout bookingId={bookingId} price={price} feeRate={info.platformFeeRate} number={info.number} accountName={info.accountName} onDone={onDone} /></>;
 }
 
 export default function Checkout({ bookingId, amount, onDone, onCancel }: { bookingId: string; amount?: number; onDone: () => void; onCancel: () => void }) {

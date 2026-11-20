@@ -5,7 +5,10 @@ module.exports = (sequelize, DataTypes) => {
       id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
       clientId: { type: DataTypes.UUID, allowNull: false },
       coachId: { type: DataTypes.UUID, allowNull: false },
-      timeSlotId: { type: DataTypes.UUID, allowNull: false, unique: true },
+      // Not unique: a slot freed by a cancelled booking can be booked again.
+      timeSlotId: { type: DataTypes.UUID, allowNull: false },
+      // Shared by bookings created (and paid for) together in one checkout.
+      checkoutId: { type: DataTypes.UUID, allowNull: true },
       sportCategoryId: { type: DataTypes.UUID, allowNull: false },
       status: {
         type: DataTypes.ENUM('pending', 'confirmed', 'completed', 'cancelled'),
@@ -20,7 +23,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     {
       tableName: 'bookings',
-      indexes: [{ fields: ['client_id'] }, { fields: ['coach_id'] }, { fields: ['status'] }],
+      indexes: [{ fields: ['client_id'] }, { fields: ['coach_id'] }, { fields: ['status'] }, { fields: ['time_slot_id'] }, { fields: ['checkout_id'] }],
     }
   );
 

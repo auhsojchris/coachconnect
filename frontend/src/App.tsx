@@ -166,13 +166,23 @@ function CoachDirectory() {
 
 function CoachCard({ coach }: { coach: Coach }) { const tags = coach.specializations?.map((s) => s.sportCategory?.name).filter(Boolean) as string[] || []; return <Link className="coach-card" to={`/coaches/${coach.id}`}><div className="coach-photo">{coach.user?.profileImage ? <img className="coach-photo-image" src={coach.user.profileImage} alt={`${coach.user.name || 'Coach'} profile`} /> : <div className="avatar-large">{coach.user?.name?.slice(0, 1) || 'C'}</div>}{coach.isVerified && <span className="verified"><Check size={13} /> Verified</span>}<button className="heart-btn" onClick={(e) => e.preventDefault()} aria-label="Save coach"><Heart size={18} /></button></div><div className="coach-body"><div className="coach-name"><div><h3>{coach.user?.name || 'Coach'}</h3><p>{coach.city || coach.location || 'Online coaching'}</p></div><span className="rating"><Star size={14} fill="currentColor" /> {Number(coach.averageRating || 0).toFixed(1)}</span></div><div className="tag-row">{(tags.length ? tags : ['Performance']).slice(0, 2).map((tag) => <span key={tag}>{tag}</span>)}</div><div className="card-footer"><strong>₱{Number(coach.hourlyRate || 0)} <small>/ session</small></strong><span>View profile <ArrowRight size={15} /></span></div></div></Link>; }
 
+// Matches MAX_SLOTS_PER_CHECKOUT in the backend booking validator.
+const MAX_SLOTS_PER_CHECKOUT = 10;
+
+/** Same formula as the backend's calculateSessionPrice: rate × hours. */
+function sessionPrice(hourlyRate: number, slot: TimeSlot) {
+  const minutes = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+  return Math.round(Number(hourlyRate) * ((minutes(slot.endTime) - minutes(slot.startTime)) / 60) * 100) / 100;
+}
+
 function CoachDetails({ session }: { session: Session | null }) {
   const { id = '' } = useParams();
   const [coach, setCoach] = useState<Coach | null>(null);
   const [slots, setSlots] = useState<TimeSlot[]>([]);
   const [reviews, setReviews] = useState<Review[]>([]);
   const [tab, setTab] = useState<'about' | 'reviews'>('about');
-  const [selected, setSelected] = useState('');
+  const [selected, setSelected] = useState<string[]>([]);
+  const [booking, setBooking] = useState(false);
   const [selectedSportCategoryId, setSelectedSportCategoryId] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
@@ -195,11 +205,29 @@ function CoachDetails({ session }: { session: Session | null }) {
 
   const book = async () => {
     if (!session) { navigate('/login'); return; }
-    if (!selected) { setMessage('Choose an available time first.'); return; }
+    if (!selected.length) { setMessage('Choose at least one available time first.'); return; }
     if (!selectedSportCategoryId) { setMessage('Choose a sport for this session.'); return; }
-    try { await api.createBooking({ coachId: coach.id, timeSlotId: selected, sportCategoryId: selectedSportCategoryId }); navigate('/dashboard/bookings'); }
-    catch (e) { setMessage(e instanceof Error ? e.message : 'Could not create booking.'); }
+    setBooking(true);
+    setMessage('');
+    try {
+      await api.createBookings({ coachId: coach.id, timeSlotIds: selected, sportCategoryId: selectedSportCategoryId });
+      navigate('/dashboard/bookings');
+    } catch (e) {
+      setMessage(e instanceof Error ? e.message : 'Could not create booking.');
+      // Slots may have been taken in the meantime — refresh what's open.
+      api.availability(coach.id).then((a) => { const open = a.data?.timeSlots || []; setSlots(open); setSelected((sel) => sel.filter((id) => open.some((s) => s.id === id))); }).catch(() => {});
+    } finally { setBooking(false); }
   };
+
+  const toggleSlot = (id: string) => {
+    if (selected.includes(id)) { setSelected(selected.filter((s) => s !== id)); return; }
+    if (selected.length >= MAX_SLOTS_PER_CHECKOUT) { setMessage(`You can book up to ${MAX_SLOTS_PER_CHECKOUT} sessions at a time.`); return; }
+    setMessage('');
+    setSelected([...selected, id]);
+  };
+  const slotsByDate = slots.reduce<Record<string, TimeSlot[]>>((acc, s) => { (acc[s.date] ||= []).push(s); return acc; }, {});
+  const selectedSlots = slots.filter((s) => selected.includes(s.id));
+  const total = selectedSlots.reduce((sum, s) => sum + sessionPrice(coach.hourlyRate, s), 0);
 
   const tags = coach.specializations?.map((s) => s.sportCategory?.name).filter(Boolean) as string[] || [];
   const levels = SKILL_LEVELS.filter((l) => coach.skillLevels?.includes(l));
@@ -258,8 +286,36 @@ function CoachDetails({ session }: { session: Session | null }) {
         <p className="eyebrow">BOOK A SESSION</p>
         <div className="price"><strong>₱{Number(coach.hourlyRate || 0)}</strong><span>/ session</span></div>
         {(coach.specializations?.length || 0) > 0 && <label>Sport for this session<select value={selectedSportCategoryId} onChange={(e) => setSelectedSportCategoryId(e.target.value)}><option value="">Choose a sport</option>{coach.specializations?.map((specialization) => <option key={specialization.sportCategoryId} value={specialization.sportCategoryId}>{specialization.sportCategory?.name || 'Coaching'}</option>)}</select></label>}
-        <label>Select an available time<select value={selected} onChange={(e) => setSelected(e.target.value)}><option value="">Choose a time</option>{slots.map((slot) => <option key={slot.id} value={slot.id}>{slot.date} · {slot.startTime}–{slot.endTime}</option>)}</select></label>
-        <button className="button full" onClick={book}>Request session <ArrowRight size={16} /></button>
+        <p style={{ fontSize: '.78rem', fontWeight: 700, margin: '14px 0 8px' }}>Pick one or more times</p>
+        {slots.length === 0 ? <p className="muted" style={{ fontSize: '.8rem' }}>No open times right now — check back soon.</p> : (
+          <div style={{ maxHeight: 280, overflowY: 'auto', marginBottom: 12, paddingRight: 4 }}>
+            {Object.entries(slotsByDate).map(([date, daySlots]) => (
+              <div key={date} style={{ marginBottom: 10 }}>
+                <p className="muted" style={{ fontSize: '.7rem', fontWeight: 700, letterSpacing: '.04em', marginBottom: 6 }}>{new Date(`${date}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase()}</p>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {daySlots.map((slot) => {
+                    const on = selected.includes(slot.id);
+                    return <button key={slot.id} type="button" aria-pressed={on} onClick={() => toggleSlot(slot.id)} className="mono"
+                      style={{ fontSize: '.75rem', padding: '6px 10px', borderRadius: 6, cursor: 'pointer', border: `1.5px solid ${on ? 'var(--turf)' : 'var(--line)'}`, background: on ? 'var(--turf)' : 'transparent', color: on ? '#fff' : 'inherit' }}>
+                      {on && <Check size={11} style={{ marginRight: 3, verticalAlign: -1 }} />}{slot.startTime.slice(0, 5)}
+                    </button>;
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {selectedSlots.length > 0 && <div style={{ borderTop: '1px solid var(--line)', padding: '10px 0', marginBottom: 6, fontSize: '.82rem' }}>
+          {selectedSlots.map((s) => <div key={s.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0' }}>
+            <span>{new Date(`${s.date}T00:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} · {s.startTime.slice(0, 5)}–{s.endTime.slice(0, 5)}</span>
+            <span className="mono">₱{sessionPrice(coach.hourlyRate, s).toLocaleString()}</span>
+          </div>)}
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, borderTop: '1px solid var(--line)', marginTop: 6, paddingTop: 6 }}>
+            <span>Total · {selectedSlots.length} session{selectedSlots.length > 1 ? 's' : ''}</span><span className="mono">₱{total.toLocaleString()}</span>
+          </div>
+        </div>}
+        <button className="button full" onClick={book} disabled={booking}>{booking ? 'Booking…' : selectedSlots.length > 1 ? `Request ${selectedSlots.length} sessions` : 'Request session'} <ArrowRight size={16} /></button>
+        {selectedSlots.length > 1 && <small style={{ display: 'block', marginTop: 6 }}>You’ll pay for all {selectedSlots.length} sessions together in one checkout.</small>}
         {message && <p className="form-message">{message}</p>}
         <small>Free cancellation up to 24 hours before your session.</small>
       </aside>
@@ -418,13 +474,53 @@ function Bookings({ viewerRole }: { viewerRole: Role }) {
   const [loading, setLoading] = useState(true);
   const refresh = () => { setLoading(true); api.bookings().then((r) => setItems(r.data || [])).finally(() => setLoading(false)); };
   useEffect(refresh, []);
+
+  // Multi-session checkouts still waiting for payment: paid once, together.
+  const unpaidCheckouts = viewerRole === 'client' ? Object.values(items.reduce<Record<string, Booking[]>>((acc, b) => {
+    if (b.checkoutId && needsClientPayment(b)) (acc[b.checkoutId] ||= []).push(b);
+    return acc;
+  }, {})).filter((group) => group.length > 1) : [];
+  const groupedIds = new Set(unpaidCheckouts.flat().map((b) => b.id));
+
   return <div className="content-page">
     <div className="dash-header"><div><p className="eyebrow">{viewerRole === 'coach' ? 'MANAGE YOUR SESSIONS' : 'YOUR TRAINING LOG'}</p><h1>Bookings</h1></div>{viewerRole === 'client' && <Link className="button" to="/coaches">New booking <ArrowRight size={16} /></Link>}</div>
-    <div className="dash-panel">{loading ? <Loading /> : items.length ? items.map((item) => <BookingRow key={item.id} booking={item} viewerRole={viewerRole} onChanged={refresh} />) : <EmptyState compact />}</div>
+    {!loading && unpaidCheckouts.map((group) => <CheckoutGroup key={group[0].checkoutId!} bookings={group} onChanged={refresh} />)}
+    <div className="dash-panel">{loading ? <Loading /> : items.length ? items.map((item) => <BookingRow key={item.id} booking={item} viewerRole={viewerRole} onChanged={refresh} payViaGroup={groupedIds.has(item.id)} />) : <EmptyState compact />}</div>
   </div>;
 }
 
-function BookingRow({ booking, viewerRole, onChanged }: { booking: Booking; viewerRole: Role; onChanged: () => void }) {
+function needsClientPayment(booking: Booking) {
+  const awaitingGcash = booking.payment?.provider === 'gcash' && booking.payment?.status === 'submitted';
+  return booking.status === 'pending' && booking.payment?.status !== 'paid' && !awaitingGcash;
+}
+
+function CheckoutGroup({ bookings, onChanged }: { bookings: Booking[]; onChanged: () => void }) {
+  const [paying, setPaying] = useState(false);
+  const sorted = [...bookings].sort((a, b) => `${a.timeSlot?.date} ${a.timeSlot?.startTime}`.localeCompare(`${b.timeSlot?.date} ${b.timeSlot?.startTime}`));
+  const total = Math.round(sorted.reduce((sum, b) => sum + Number(b.price), 0) * 100) / 100;
+  const coachName = sorted[0].coach?.user?.name || 'your coach';
+
+  return <div className="dash-panel" style={{ marginBottom: 20, borderColor: 'var(--orange)' }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+      <div>
+        <p className="eyebrow" style={{ marginBottom: 6 }}>AWAITING PAYMENT</p>
+        <h2 style={{ fontSize: '1.15rem' }}>{sorted.length} sessions with {coachName}</h2>
+        <ul style={{ listStyle: 'none', padding: 0, margin: '8px 0 0', fontSize: '.82rem' }}>
+          {sorted.map((b) => <li key={b.id} className="muted" style={{ padding: '2px 0' }}>
+            {b.timeSlot?.date ? new Date(`${b.timeSlot.date}T00:00:00`).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) : 'TBD'} · {b.timeSlot?.startTime?.slice(0, 5)} · <span className="mono">₱{Number(b.price).toLocaleString()}</span>
+          </li>)}
+        </ul>
+      </div>
+      <div style={{ textAlign: 'right' }}>
+        <div className="mono" style={{ fontSize: '1.4rem', fontWeight: 700 }}>₱{total.toLocaleString()}</div>
+        <button className="button" style={{ marginTop: 8 }} onClick={() => setPaying((p) => !p)}>{paying ? 'Hide payment' : `Pay for ${sorted.length} sessions`}</button>
+      </div>
+    </div>
+    {paying && <div style={{ marginTop: 16 }}><Checkout bookingId={sorted[0].id} amount={total} onDone={() => { setPaying(false); onChanged(); }} onCancel={() => setPaying(false)} /></div>}
+  </div>;
+}
+
+function BookingRow({ booking, viewerRole, onChanged, payViaGroup = false }: { booking: Booking; viewerRole: Role; onChanged: () => void; payViaGroup?: boolean }) {
   const [busy, setBusy] = useState(false);
   const [paying, setPaying] = useState(false);
   const [reviewing, setReviewing] = useState(false);
@@ -435,7 +531,7 @@ function BookingRow({ booking, viewerRole, onChanged }: { booking: Booking; view
   const act = async (fn: () => Promise<unknown>) => { setBusy(true); setMsg(''); try { await fn(); onChanged(); } catch (e) { setMsg(e instanceof Error ? e.message : 'That didn’t go through.'); setBusy(false); } };
 
   const awaitingGcash = booking.payment?.provider === 'gcash' && booking.payment?.status === 'submitted';
-  const needsPayment = viewerRole === 'client' && booking.status === 'pending' && booking.payment?.status !== 'paid' && !awaitingGcash;
+  const needsPayment = viewerRole === 'client' && !payViaGroup && needsClientPayment(booking);
   const canReview = viewerRole === 'client' && booking.status === 'completed';
   const canResolveGcash = viewerRole === 'coach' && awaitingGcash;
 
@@ -445,7 +541,8 @@ function BookingRow({ booking, viewerRole, onChanged }: { booking: Booking; view
       <div className="booking-info">
         <strong>{otherPartyName}</strong>
         <span>{booking.sportCategory?.name || 'Training'} · {booking.timeSlot?.startTime || 'Time pending'}</span>
-        {awaitingGcash && <span style={{ color: 'var(--orange)' }}>GCash ref {booking.payment?.gcashReference} · awaiting confirmation</span>}
+        {awaitingGcash && <span style={{ color: 'var(--orange)' }}>GCash ref {booking.payment?.gcashReference} · awaiting confirmation{booking.checkoutId ? ' · covers every session paid with this reference' : ''}</span>}
+        {payViaGroup && <span style={{ color: 'var(--orange)' }}>Part of a multi-session checkout — pay above</span>}
       </div>
       <span className={`status ${booking.status}`}>{booking.status}</span>
       <div style={{ display: 'flex', gap: 10 }}>

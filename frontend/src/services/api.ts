@@ -11,7 +11,7 @@ export interface Coach { id: string; hourlyRate: number; bio?: string; city?: st
 export interface TimeSlot { id: string; date: string; startTime: string; endTime: string; status: string; }
 export interface Availability { id: string; coachId: string; isRecurring: boolean; dayOfWeek?: number | null; specificDate?: string | null; startTime: string; endTime: string; isActive?: boolean; }
 export interface Payment { id: string; status: string; amount: number; currency?: string; provider?: string; gcashReference?: string; paymongoPaymentIntentId?: string; paidAt?: string; receiptUrl?: string; platformFeeAmount?: number; platformFeeRate?: number; platformFeeSettled?: boolean; payoutAmount?: number; payoutSettled?: boolean; booking?: Booking; }
-export interface Booking { id: string; status: string; price: number; notes?: string; coach?: Coach; client?: User; timeSlot?: TimeSlot; sportCategory?: SportCategory; payment?: Payment; cancellationReason?: string; createdAt?: string; }
+export interface Booking { id: string; status: string; price: number; checkoutId?: string | null; notes?: string; coach?: Coach; client?: User; timeSlot?: TimeSlot; sportCategory?: SportCategory; payment?: Payment; cancellationReason?: string; createdAt?: string; }
 export interface Review { id: string; rating: number; comment?: string; isApproved?: boolean; isFlagged?: boolean; flagReason?: string; createdAt: string; client?: User; coach?: Coach; booking?: Booking; }
 export interface AppNotification { id: string; title: string; message: string; isRead: boolean; createdAt: string; }
 export interface Message { id: string; content: string; isRead: boolean; createdAt: string; sender?: User; recipient?: User; bookingId: string; }
@@ -99,6 +99,7 @@ export const api = {
   bookings: (filters: Partial<{ status: string; timeframe: 'upcoming' | 'past' }> = {}) => request<{ data: Booking[]; meta?: { total: number } }>(`/bookings${qs(filters)}`),
   booking: (id: string) => request<{ data: Booking }>(`/bookings/${id}`),
   createBooking: (payload: { coachId: string; timeSlotId: string; sportCategoryId: string; notes?: string }) => request<{ data: Booking }>('/bookings', { method: 'POST', body: JSON.stringify(payload) }),
+  createBookings: (payload: { coachId: string; timeSlotIds: string[]; sportCategoryId: string; notes?: string }) => request<{ data: { checkoutId: string | null; total: number; bookings: Booking[] } }>('/bookings/batch', { method: 'POST', body: JSON.stringify(payload) }),
   cancelBooking: (id: string, reason?: string) => request<{ data: Booking }>(`/bookings/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }),
   updateBookingStatus: (id: string, status: 'confirmed' | 'completed' | 'cancelled') => request<{ data: Booking }>(`/bookings/${id}`, { method: 'PUT', body: JSON.stringify({ status }) }),
   rescheduleBooking: (id: string, newTimeSlotId: string) => request<{ data: Booking }>(`/bookings/${id}/reschedule`, { method: 'POST', body: JSON.stringify({ newTimeSlotId }) }),
@@ -109,10 +110,10 @@ export const api = {
   sendMessage: (payload: { bookingId: string; content: string }) => request<{ data: Message }>('/messages', { method: 'POST', body: JSON.stringify(payload) }),
 
   // ---- Payments ----
-  createPayment: (bookingId: string) => request<{ data: { payment: Payment; clientSecret: string } }>('/payments', { method: 'POST', body: JSON.stringify({ bookingId }) }),
+  createPayment: (bookingId: string) => request<{ data: { payment: Payment; payments: Payment[]; total: number; clientSecret: string } }>('/payments', { method: 'POST', body: JSON.stringify({ bookingId }) }),
 
   // ---- GCash ----
-  gcashInfo: (bookingId: string) => request<{ data: { number: string; accountName: string; platformFeeRate: number; paymongoConfigured: boolean } }>(`/payments/gcash-info/${bookingId}`),
+  gcashInfo: (bookingId: string) => request<{ data: { number: string; accountName: string; platformFeeRate: number; paymongoConfigured: boolean; amount: number; sessionCount: number } }>(`/payments/gcash-info/${bookingId}`),
   platformGcashAccount: () => request<{ data: { number: string; accountName: string } }>('/payments/platform-gcash-account'),
   startGcashCheckout: (bookingId: string) => request<{ data: { redirectUrl: string } }>('/payments/gcash/checkout', { method: 'POST', body: JSON.stringify({ bookingId }) }),
   submitGcashPayment: (payload: { bookingId: string; referenceNumber: string }) => request<{ data: Payment }>('/payments/gcash', { method: 'POST', body: JSON.stringify(payload) }),
