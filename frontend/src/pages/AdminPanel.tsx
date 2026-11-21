@@ -4,11 +4,14 @@ import { api, Payment, Review, Role, SportCategory, User } from '../services/api
 import { Loading } from '../components/shared';
 import Overview from './AdminOverview';
 import PayoutsPanel from './AdminPayouts';
+import { CommissionsByCoachPanel, PaymentsHistory } from './AdminFinance';
 
 type Tab = 'overview' | 'payments' | 'users' | 'categories' | 'reviews' | 'commissions' | 'payouts' | 'settings';
 
 export default function AdminPanel() {
   const [tab, setTab] = useState<Tab>('overview');
+  // Bumped when a QR payment is confirmed so the payments list reloads.
+  const [paymentsVersion, setPaymentsVersion] = useState(0);
   return <div className="content-page">
     <div className="dash-header"><div><p className="eyebrow">ADMIN COMMAND CENTER</p><h1>System overview</h1><p className="muted">A clear view of what is moving through CoachConnect.</p></div></div>
     <div className="tab-strip">
@@ -17,11 +20,14 @@ export default function AdminPanel() {
       ))}
     </div>
     {tab === 'overview' && <Overview onNavigate={setTab} />}
-    {tab === 'payments' && <QrPaymentsPanel />}
+    {tab === 'payments' && <div className="fi-stack">
+      <QrPaymentsPanel onConfirmed={() => setPaymentsVersion((v) => v + 1)} />
+      <PaymentsHistory key={paymentsVersion} />
+    </div>}
     {tab === 'users' && <UsersPanel />}
     {tab === 'categories' && <CategoriesPanel />}
     {tab === 'reviews' && <ReviewsPanel />}
-    {tab === 'commissions' && <CommissionsPanel />}
+    {tab === 'commissions' && <CommissionsByCoachPanel />}
     {tab === 'payouts' && <PayoutsPanel />}
     {tab === 'settings' && <SettingsPanel />}
   </div>;
@@ -30,8 +36,8 @@ export default function AdminPanel() {
 /** One client checkout paid with one QR transfer: all its sessions resolve together. */
 type QrGroup = { key: string; payments: Payment[]; total: number };
 
-function QrPaymentsPanel() {
-  const [status, setStatus] = useState<'submitted' | 'paid' | 'failed' | 'all'>('submitted');
+function QrPaymentsPanel({ onConfirmed }: { onConfirmed: () => void }) {
+  const [status, setStatus] = useState<'submitted' | 'failed'>('submitted');
   const [payments, setPayments] = useState<Payment[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyKey, setBusyKey] = useState('');
@@ -61,21 +67,21 @@ function QrPaymentsPanel() {
       await (action === 'confirm' ? api.confirmGcashPayment(id) : api.rejectGcashPayment(id));
       setMessage(action === 'confirm' ? 'Payment confirmed — the sessions are booked and the coach payout is queued.' : 'Payment rejected — the client has been notified.');
       refresh();
+      if (action === 'confirm') onConfirmed();
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'That didn’t go through.');
     } finally { setBusyKey(''); }
   };
 
   return <div className="dash-panel">
-    <p className="muted" style={{ fontSize: '.8rem', marginBottom: 14 }}>Payments clients sent to the platform QR. Check each reference number in your GCash/bank history, then confirm it — that books every session in the checkout and queues the coach’s payout.</p>
-    <div className="filter-bar">
-      <select value={status} onChange={(e) => setStatus(e.target.value as typeof status)}>
+    <div className="fi-qr-head">
+      <h2>{status === 'submitted' ? `Waiting for verification${groups.length ? ` (${groups.length})` : ''}` : 'Rejected QR payments'}</h2>
+      <select className="fi-select" value={status} onChange={(e) => setStatus(e.target.value as typeof status)} aria-label="QR payment status">
         <option value="submitted">To verify</option>
-        <option value="paid">Confirmed</option>
         <option value="failed">Rejected</option>
-        <option value="all">All</option>
       </select>
     </div>
+    <p className="muted" style={{ fontSize: '.8rem', marginBottom: 14 }}>Payments clients sent to the platform QR. Check each reference number in your GCash/bank history, then confirm it — that books every session in the checkout and queues the coach’s payout. Confirmed ones move to Successful payments below.</p>
     {message && <p className="form-message">{message}</p>}
     {loading ? <Loading /> : groups.length === 0 ? <p className="muted">{status === 'submitted' ? 'Nothing waiting for verification.' : 'No payments to show.'}</p> : (
       <table className="data-table">
@@ -193,56 +199,6 @@ function CategoriesPanel() {
               <td style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button className="btn-outline" onClick={() => toggleActive(c)}>{c.isActive ? 'Deactivate' : 'Activate'}</button>
                 <button className="btn-outline danger" onClick={() => remove(c)}>Delete</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    )}
-  </div>;
-}
-
-function CommissionsPanel() {
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [totalOwed, setTotalOwed] = useState(0);
-  const [onlyUnsettled, setOnlyUnsettled] = useState(true);
-  const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState('');
-
-  const refresh = () => {
-    setLoading(true);
-    api.adminGcashCommissions(onlyUnsettled ? { settled: false } : {})
-      .then((r) => { setPayments(r.data); setTotalOwed(r.meta?.totalOwed || 0); })
-      .finally(() => setLoading(false));
-  };
-  useEffect(refresh, [onlyUnsettled]);
-
-  const toggleSettled = async (p: Payment) => {
-    setBusyId(p.id);
-    try { await api.adminSettleGcashCommission(p.id, !p.platformFeeSettled); refresh(); }
-    finally { setBusyId(''); }
-  };
-
-  return <div className="dash-panel">
-    <div className="filter-bar" style={{ justifyContent: 'space-between' }}>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, width: 'auto', margin: 0 }}>
-        <input type="checkbox" style={{ width: 'auto', margin: 0 }} checked={onlyUnsettled} onChange={(e) => setOnlyUnsettled(e.target.checked)} /> Unsettled only
-      </label>
-      {!onlyUnsettled && <strong className="mono">₱{totalOwed.toLocaleString()} still owed</strong>}
-    </div>
-    {loading ? <Loading /> : payments.length === 0 ? <p className="muted">No GCash commissions to show.</p> : (
-      <table className="data-table">
-        <thead><tr><th>Coach</th><th>Client</th><th>Booking amount</th><th>Commission</th><th>Status</th><th></th></tr></thead>
-        <tbody>
-          {payments.map((p) => (
-            <tr key={p.id}>
-              <td>{p.booking?.coach?.user?.name || '—'}</td>
-              <td>{p.booking?.client?.name || '—'}</td>
-              <td className="mono">₱{Number(p.amount).toLocaleString()}</td>
-              <td className="mono">₱{Number(p.platformFeeAmount || 0).toLocaleString()}</td>
-              <td><span className={`badge-status ${p.platformFeeSettled ? 'confirmed' : 'pending'}`}>{p.platformFeeSettled ? 'settled' : 'owed'}</span></td>
-              <td style={{ textAlign: 'right' }}>
-                <button className="btn-outline" disabled={busyId === p.id} onClick={() => toggleSettled(p)}>{p.platformFeeSettled ? 'Mark unsettled' : 'Mark settled'}</button>
               </td>
             </tr>
           ))}

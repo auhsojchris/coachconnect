@@ -548,6 +548,189 @@ const settlePayouts = catchAsync(async (req, res) => {
   });
 });
 
+const FINANCE_DAYS = [7, 30, 90];
+const parseDays = (v) => (FINANCE_DAYS.includes(Number(v)) ? Number(v) : null); // null = all time
+const paidMoment = (p) => p.paidAt || p.updatedAt;
+const includesText = (q, ...fields) => !q || fields.some((f) => f && String(f).toLowerCase().includes(q));
+
+/** Every successful client payment (optionally since `days` ago), newest first, with who/what. */
+async function fetchPaidPayments(days, extraWhere = {}) {
+  const payments = await Payment.findAll({
+    where: { status: 'paid', ...extraWhere },
+    include: [{
+      model: Booking,
+      as: 'booking',
+      attributes: ['id', 'checkoutId', 'status'],
+      include: [
+        { model: User, as: 'client', attributes: ['id', 'name', 'email'] },
+        { model: TimeSlot, as: 'timeSlot', attributes: ['date', 'startTime'] },
+        { model: Coach, as: 'coach', attributes: ['id'], include: [{ model: User, as: 'user', attributes: ['name', 'email'] }] },
+      ],
+    }],
+  });
+  const since = days ? startOfLocalDay(days - 1) : null;
+  return payments
+    .filter((p) => !since || new Date(paidMoment(p)) >= since)
+    .sort((a, b) => new Date(paidMoment(b)) - new Date(paidMoment(a)));
+}
+
+// GET /api/admin/payments — successful client payments. Sessions bought in
+// one checkout are one transaction.
+//   ?days=7|30|90 (default all)  ?method=<provider>  ?search=  ?page= ?limit=
+const listPaidPayments = catchAsync(async (req, res) => {
+  const days = parseDays(req.query.days);
+  const method = req.query.method || null;
+  const q = (req.query.search || '').trim().toLowerCase();
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+
+  const payments = await fetchPaidPayments(days);
+  const groups = new Map();
+  const methods = new Map();
+  for (const p of payments) {
+    const m = methods.get(p.provider) || { method: p.provider, transactions: new Set(), amount: 0 };
+    const key = p.booking?.checkoutId || p.id;
+    m.transactions.add(key);
+    m.amount += money(p.amount);
+    methods.set(p.provider, m);
+
+    if (method && p.provider !== method) continue;
+    const b = p.booking;
+    if (!includesText(q, b?.client?.name, b?.client?.email, b?.coach?.user?.name, p.gcashReference, p.paymongoPaymentIntentId)) continue;
+    if (!groups.has(key)) {
+      groups.set(key, {
+        id: key,
+        paidAt: paidMoment(p),
+        method: p.provider,
+        reference: p.gcashReference || p.paymongoPaymentIntentId || p.stripePaymentIntentId || null,
+        receiptUrl: p.receiptUrl || null,
+        client: b?.client ? { name: b.client.name, email: b.client.email } : null,
+        coach: b?.coach?.user ? { name: b.coach.user.name } : null,
+        amount: 0,
+        commission: 0,
+        sessions: [],
+      });
+    }
+    const g = groups.get(key);
+    g.amount += money(p.amount);
+    g.commission += money(p.platformFeeAmount);
+    g.sessions.push({ paymentId: p.id, date: b?.timeSlot?.date || null, startTime: b?.timeSlot?.startTime?.slice(0, 5) || null, amount: money(p.amount), bookingStatus: b?.status || null });
+  }
+
+  const all = [...groups.values()].map((g) => ({
+    ...g,
+    amount: money(g.amount),
+    commission: money(g.commission),
+    sessions: g.sessions.sort((a, b) => `${a.date} ${a.startTime}`.localeCompare(`${b.date} ${b.startTime}`)),
+  }));
+  const total = all.length;
+
+  sendResponse(res, 200, 'Payments retrieved', {
+    days: days || 'all',
+    summary: {
+      transactions: total,
+      sessions: all.reduce((s, g) => s + g.sessions.length, 0),
+      amount: money(all.reduce((s, g) => s + g.amount, 0)),
+      commission: money(all.reduce((s, g) => s + g.commission, 0)),
+      byMethod: [...methods.values()]
+        .map((m) => ({ method: m.method, transactions: m.transactions.size, amount: money(m.amount) }))
+        .sort((a, b) => b.amount - a.amount),
+    },
+    transactions: all.slice((page - 1) * limit, page * limit),
+  }, { total, page, limit, totalPages: Math.max(1, Math.ceil(total / limit)) });
+});
+
+// GET /api/admin/commissions — platform commission per coach, with every
+// record. Commission on money the platform collected (QR / PayMongo) was
+// kept automatically; on direct-to-coach GCash it's owed by the coach until
+// an admin marks it collected.
+//   ?days=7|30|90 (default all)  ?status=all|owed (default all)  ?search=
+const listCommissionsByCoach = catchAsync(async (req, res) => {
+  const days = parseDays(req.query.days);
+  const onlyOwed = req.query.status === 'owed';
+  const q = (req.query.search || '').trim().toLowerCase();
+
+  const payments = await fetchPaidPayments(days, { platformFeeAmount: { [Op.ne]: null } });
+  const coaches = new Map();
+  const summary = { commission: 0, collected: 0, owed: 0, gross: 0 };
+
+  for (const p of payments) {
+    const b = p.booking;
+    const fee = money(p.platformFeeAmount);
+    const heldByPlatform = PLATFORM_HELD.includes(p.provider);
+    const collected = heldByPlatform || !!p.platformFeeSettled;
+    summary.commission += fee;
+    summary.gross += money(p.amount);
+    summary[collected ? 'collected' : 'owed'] += fee;
+
+    if (onlyOwed && collected) continue;
+    if (!includesText(q, b?.coach?.user?.name, b?.coach?.user?.email)) continue;
+    const key = b?.coach?.id || 'unknown';
+    if (!coaches.has(key)) {
+      coaches.set(key, {
+        coachId: b?.coach?.id || null,
+        name: b?.coach?.user?.name || 'Unknown coach',
+        email: b?.coach?.user?.email || null,
+        sessions: 0, gross: 0, commission: 0, collected: 0, owed: 0, lastPaidAt: null, records: [],
+      });
+    }
+    const c = coaches.get(key);
+    c.sessions += 1;
+    c.gross += money(p.amount);
+    c.commission += fee;
+    c[collected ? 'collected' : 'owed'] += fee;
+    if (!c.lastPaidAt) c.lastPaidAt = paidMoment(p); // payments are newest first
+    c.records.push({
+      paymentId: p.id,
+      paidAt: paidMoment(p),
+      client: b?.client?.name || null,
+      sessionDate: b?.timeSlot?.date || null,
+      startTime: b?.timeSlot?.startTime?.slice(0, 5) || null,
+      method: p.provider,
+      amount: money(p.amount),
+      rate: p.platformFeeRate !== null && p.platformFeeRate !== undefined ? Number(p.platformFeeRate) : null,
+      commission: fee,
+      heldByPlatform,
+      collected,
+    });
+  }
+
+  const list = [...coaches.values()]
+    .map((c) => ({ ...c, gross: money(c.gross), commission: money(c.commission), collected: money(c.collected), owed: money(c.owed) }))
+    .sort((a, b) => b.owed - a.owed || b.commission - a.commission || a.name.localeCompare(b.name));
+
+  sendResponse(res, 200, 'Commissions retrieved', {
+    days: days || 'all',
+    status: onlyOwed ? 'owed' : 'all',
+    summary: {
+      gross: money(summary.gross),
+      commission: money(summary.commission),
+      collected: money(summary.collected),
+      owed: money(summary.owed),
+      coachesOwing: new Set(payments.filter((p) => !PLATFORM_HELD.includes(p.provider) && !p.platformFeeSettled).map((p) => p.booking?.coach?.id)).size,
+    },
+    coaches: list,
+  });
+});
+
+// PUT /api/admin/commissions/settle — mark direct-GCash commissions as
+// collected from the coach (or undo), several at once.
+const settleCommissions = catchAsync(async (req, res) => {
+  const { paymentIds } = req.body;
+  const settled = req.body.settled !== undefined ? req.body.settled : true;
+  const payments = await Payment.findAll({ where: { id: { [Op.in]: paymentIds } } });
+  if (payments.length !== new Set(paymentIds).size) throw ApiError.notFound('One or more payments were not found');
+  if (payments.some((p) => p.provider !== 'gcash' || p.status !== 'paid' || p.platformFeeAmount === null)) {
+    throw ApiError.badRequest('Only commissions on direct GCash payments need collecting');
+  }
+  await Payment.update({ platformFeeSettled: settled }, { where: { id: { [Op.in]: paymentIds } } });
+  sendResponse(res, 200, 'Commission settlement updated', {
+    updated: payments.length,
+    settled,
+    amount: money(payments.reduce((s, p) => s + Number(p.platformFeeAmount), 0)),
+  });
+});
+
 // GET /api/admin/reviews — moderation queue (all reviews, optionally filtered)
 const listReviews = catchAsync(async (req, res) => {
   const { flagged, approved, page = 1, limit = 20 } = req.query;
@@ -629,4 +812,7 @@ module.exports = {
   settleGcashPayout,
   listWeeklyPayouts,
   settlePayouts,
+  listPaidPayments,
+  listCommissionsByCoach,
+  settleCommissions,
 };

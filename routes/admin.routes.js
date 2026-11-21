@@ -76,4 +76,17 @@ router.put(
   adminController.settlePayouts
 );
 
+router.get('/payments', adminController.listPaidPayments);
+router.get('/commissions', adminController.listCommissionsByCoach);
+router.put(
+  '/commissions/settle',
+  [
+    body('paymentIds').isArray({ min: 1, max: 500 }),
+    body('paymentIds.*').isUUID(),
+    body('settled').optional().isBoolean(),
+  ],
+  validate,
+  adminController.settleCommissions
+);
+
 module.exports = router;

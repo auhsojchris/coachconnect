@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, Copy, Download, Search } from 'lucide-react'
 import { api, CoachPayoutLine, PayoutPeriod, PayoutStatusFilter, PayoutWeek, WeeklyPayouts } from '../services/api';
 import { Loading } from '../components/shared';
 
-const peso = (n: number) => `₱${Number(n || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}`;
+export const peso = (n: number) => `₱${Number(n || 0).toLocaleString('en-PH', { maximumFractionDigits: 2 })}`;
 // Week bounds are calendar days (YYYY-MM-DD); format them in UTC so the
 // browser's timezone can't shift them a day.
 const fmtDay = (ymd: string, opts: Intl.DateTimeFormatOptions) => new Date(`${ymd}T00:00:00Z`).toLocaleDateString('en-PH', { timeZone: 'UTC', ...opts });
@@ -37,7 +37,7 @@ function downloadCsv(week: PayoutWeek) {
   URL.revokeObjectURL(a.href);
 }
 
-function Seg<T extends string | number>({ value, options, onChange, label }: { value: T; options: [T, string][]; onChange: (v: T) => void; label: string }) {
+export function Seg<T extends string | number>({ value, options, onChange, label }: { value: T; options: [T, string][]; onChange: (v: T) => void; label: string }) {
   return <div className="ov-seg" role="group" aria-label={label}>
     {options.map(([v, text]) => <button key={String(v)} className={v === value ? 'active' : ''} aria-pressed={v === value} onClick={() => onChange(v)}>{text}</button>)}
   </div>;
