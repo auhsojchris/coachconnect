@@ -624,3 +624,19 @@ textarea:focus { border-color: var(--turf); }
   .fi-table .fi-c-ref { grid-column: 1 / span 2; grid-row: 5; max-width: none; color: var(--slate); }
   .fi-table .fi-c-ref:empty { display: none; }
 }
+
+/* ---- Courts ---- */
+.court-pick { margin-top: 12px; }
+.court-address { display: flex; align-items: center; gap: 4px; margin-top: 6px; font-size: .74rem; font-weight: 400; color: var(--slate); text-transform: none; letter-spacing: 0; font-family: inherit; }
+.ct-actions button:disabled { opacity: .4; cursor: not-allowed; }
+.booking-court { display: inline-flex; align-items: center; gap: 4px; color: var(--slate); }
+.ct-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) auto; gap: 10px; align-items: end; margin-bottom: 18px; }
+.ct-form label { margin: 0; }
+.ct-form input { margin: 4px 0 0; }
+.ct-table td { vertical-align: middle; }
+.ct-table input { margin: 0; padding: 7px 10px; font-size: .82rem; }
+.ct-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.ct-inactive td:not(.ct-keep) { opacity: .6; }
+@media (max-width: 700px) {
+  .ct-form { grid-template-columns: 1fr; }
+}

@@ -3,6 +3,7 @@ export type Role = 'admin' | 'coach' | 'client';
 export type SkillLevel = 'beginner' | 'novice' | 'intermediate' | 'advanced';
 export const SKILL_LEVELS: SkillLevel[] = ['beginner', 'novice', 'intermediate', 'advanced'];
 export interface Achievement { title: string; year?: number | null; description?: string | null; }
+export interface Court { id: string; name: string; address?: string | null; isActive?: boolean; bookingCount?: number; }
 export interface SportCategory { id: string; name: string; description?: string; icon?: string; isActive?: boolean; }
 export interface Specialization { id?: string; sportCategoryId: string; certification?: string; yearsExperience?: number; sportCategory?: SportCategory; }
 export interface CoachProfile { id: string; userId?: string; bio?: string; experienceYears?: number; hourlyRate: number; location?: string; city?: string; country?: string; averageRating?: number; totalReviews?: number; isVerified?: boolean; gcashNumber?: string; gcashAccountName?: string; tagline?: string | null; skillLevels?: SkillLevel[] | null; achievements?: Achievement[] | null; specializations?: Specialization[]; }
@@ -11,7 +12,7 @@ export interface Coach { id: string; hourlyRate: number; bio?: string; city?: st
 export interface TimeSlot { id: string; date: string; startTime: string; endTime: string; status: string; }
 export interface Availability { id: string; coachId: string; isRecurring: boolean; dayOfWeek?: number | null; specificDate?: string | null; startTime: string; endTime: string; isActive?: boolean; }
 export interface Payment { id: string; status: string; updatedAt?: string; amount: number; currency?: string; provider?: string; gcashReference?: string; paymongoPaymentIntentId?: string; paidAt?: string; receiptUrl?: string; platformFeeAmount?: number; platformFeeRate?: number; platformFeeSettled?: boolean; payoutAmount?: number; payoutSettled?: boolean; booking?: Booking; }
-export interface Booking { id: string; status: string; price: number; checkoutId?: string | null; notes?: string; coach?: Coach; client?: User; timeSlot?: TimeSlot; sportCategory?: SportCategory; payment?: Payment; cancellationReason?: string; createdAt?: string; }
+export interface Booking { id: string; status: string; price: number; court?: Court | null; checkoutId?: string | null; notes?: string; coach?: Coach; client?: User; timeSlot?: TimeSlot; sportCategory?: SportCategory; payment?: Payment; cancellationReason?: string; createdAt?: string; }
 export interface Review { id: string; rating: number; comment?: string; isApproved?: boolean; isFlagged?: boolean; flagReason?: string; createdAt: string; client?: User; coach?: Coach; booking?: Booking; }
 export interface AppNotification { id: string; title: string; message: string; isRead: boolean; createdAt: string; }
 export interface Message { id: string; content: string; isRead: boolean; createdAt: string; sender?: User; recipient?: User; bookingId: string; }
@@ -105,6 +106,11 @@ export const api = {
 
   // ---- Sport categories ----
   sportCategories: () => request<{ data: SportCategory[] }>('/sport-categories'),
+  courts: () => request<{ data: Court[] }>('/courts'),
+  adminCourts: () => request<{ data: Court[] }>('/courts/all'),
+  createCourt: (payload: { name: string; address?: string }) => request<{ data: Court }>('/courts', { method: 'POST', body: JSON.stringify(payload) }),
+  updateCourt: (id: string, payload: Partial<{ name: string; address: string; isActive: boolean }>) => request<{ data: Court }>(`/courts/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
+  deleteCourt: (id: string) => request<{ message: string }>(`/courts/${id}`, { method: 'DELETE' }),
   createSportCategory: (payload: { name: string; description?: string; icon?: string }) => request<{ data: SportCategory }>('/sport-categories', { method: 'POST', body: JSON.stringify(payload) }),
   updateSportCategory: (id: string, payload: Partial<SportCategory>) => request<{ data: SportCategory }>(`/sport-categories/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),
   deleteSportCategory: (id: string) => request<{ message: string }>(`/sport-categories/${id}`, { method: 'DELETE' }),
@@ -130,7 +136,7 @@ export const api = {
   bookings: (filters: Partial<{ status: string; timeframe: 'upcoming' | 'past' }> = {}) => request<{ data: Booking[]; meta?: { total: number } }>(`/bookings${qs(filters)}`),
   booking: (id: string) => request<{ data: Booking }>(`/bookings/${id}`),
   createBooking: (payload: { coachId: string; timeSlotId: string; sportCategoryId: string; notes?: string }) => request<{ data: Booking }>('/bookings', { method: 'POST', body: JSON.stringify(payload) }),
-  createBookings: (payload: { coachId: string; timeSlotIds: string[]; sportCategoryId: string; notes?: string }) => request<{ data: { checkoutId: string | null; total: number; bookings: Booking[] } }>('/bookings/batch', { method: 'POST', body: JSON.stringify(payload) }),
+  createBookings: (payload: { coachId: string; timeSlotIds: string[]; sportCategoryId: string; courtId?: string; notes?: string }) => request<{ data: { checkoutId: string | null; total: number; bookings: Booking[] } }>('/bookings/batch', { method: 'POST', body: JSON.stringify(payload) }),
   cancelBooking: (id: string, reason?: string) => request<{ data: Booking }>(`/bookings/${id}/cancel`, { method: 'POST', body: JSON.stringify({ reason }) }),
   updateBookingStatus: (id: string, status: 'confirmed' | 'completed' | 'cancelled') => request<{ data: Booking }>(`/bookings/${id}`, { method: 'PUT', body: JSON.stringify({ status }) }),
   rescheduleBooking: (id: string, newTimeSlotId: string) => request<{ data: Booking }>(`/bookings/${id}/reschedule`, { method: 'POST', body: JSON.stringify({ newTimeSlotId }) }),

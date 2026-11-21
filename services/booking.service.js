@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { sequelize, TimeSlot, Booking, Coach } = require('../models');
+const { sequelize, TimeSlot, Booking, Coach, Court } = require('../models');
 const ApiError = require('../utils/ApiError');
 
 function timeToMinutes(time) {
@@ -24,8 +24,8 @@ function calculateSessionPrice(hourlyRate, startTime, endTime) {
  * rejected. This is layered on top of the unique DB index on
  * (coach_id, date, start_time) as a second line of defense.
  */
-async function createBooking({ clientId, coachId, timeSlotId, sportCategoryId, notes }) {
-  const [booking] = await createBookings({ clientId, coachId, timeSlotIds: [timeSlotId], sportCategoryId, notes });
+async function createBooking({ clientId, coachId, timeSlotId, sportCategoryId, courtId, notes }) {
+  const [booking] = await createBookings({ clientId, coachId, timeSlotIds: [timeSlotId], sportCategoryId, courtId, notes });
   return booking;
 }
 
@@ -38,13 +38,21 @@ async function createBooking({ clientId, coachId, timeSlotId, sportCategoryId, n
  * When more than one slot is booked, the bookings share a checkoutId so the
  * client pays for them together in a single checkout.
  */
-async function createBookings({ clientId, coachId, timeSlotIds, sportCategoryId, notes }) {
+async function createBookings({ clientId, coachId, timeSlotIds, sportCategoryId, courtId = null, notes }) {
   const ids = [...new Set(timeSlotIds)].sort();
   if (!ids.length) throw ApiError.badRequest('Choose at least one time slot');
 
   return sequelize.transaction(async (t) => {
     const coach = await Coach.findByPk(coachId, { transaction: t });
     if (!coach) throw ApiError.notFound('Coach not found');
+
+    // Once an admin has set up courts, every booking says where it happens.
+    if (courtId) {
+      const court = await Court.findByPk(courtId, { transaction: t });
+      if (!court || !court.isActive) throw ApiError.badRequest('That court is not available. Please choose another.');
+    } else if (await Court.count({ where: { isActive: true }, transaction: t })) {
+      throw ApiError.badRequest('Choose a court for your session');
+    }
 
     const slots = await TimeSlot.findAll({
       where: { id: ids, coachId },
@@ -79,6 +87,7 @@ async function createBookings({ clientId, coachId, timeSlotIds, sportCategoryId,
             coachId,
             timeSlotId: slot.id,
             sportCategoryId,
+            courtId,
             price: calculateSessionPrice(coach.hourlyRate, slot.startTime, slot.endTime),
             notes,
             status: 'pending',
@@ -160,6 +169,7 @@ async function rescheduleBooking(bookingId, newTimeSlotId) {
         coachId: oldBooking.coachId,
         timeSlotId: newSlot.id,
         sportCategoryId: oldBooking.sportCategoryId,
+        courtId: oldBooking.courtId,
         price: oldBooking.price,
         notes: oldBooking.notes,
         status: 'pending',

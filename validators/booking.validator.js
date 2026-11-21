@@ -4,6 +4,7 @@ const createBookingRules = [
   body('coachId').isUUID().withMessage('A valid coachId is required'),
   body('timeSlotId').isUUID().withMessage('A valid timeSlotId is required'),
   body('sportCategoryId').isUUID().withMessage('A valid sportCategoryId is required'),
+  body('courtId').optional({ nullable: true }).isUUID().withMessage('A valid courtId is required'),
   body('notes').optional().isLength({ max: 1000 }),
 ];
 
@@ -16,6 +17,7 @@ const createBookingsBatchRules = [
     .withMessage(`Choose between 1 and ${MAX_SLOTS_PER_CHECKOUT} time slots`),
   body('timeSlotIds.*').isUUID().withMessage('Each timeSlotId must be a valid id'),
   body('sportCategoryId').isUUID().withMessage('A valid sportCategoryId is required'),
+  body('courtId').optional({ nullable: true }).isUUID().withMessage('A valid courtId is required'),
   body('notes').optional().isLength({ max: 1000 }),
 ];
 

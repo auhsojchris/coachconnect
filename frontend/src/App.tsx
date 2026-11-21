@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, Navigate, Outlet, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, ArrowRight, Bell, CalendarDays, Check, CircleUserRound, CreditCard, Dumbbell, Heart, LogOut, Menu, Pause, Play, Search, ShieldCheck, Star, Trophy, X } from 'lucide-react';
-import { api, AppNotification, Booking, Coach, CoachProfile, PlatformStats, Review, Role, SKILL_LEVELS, SkillLevel, SportCategory, TimeSlot, User } from './services/api';
+import { ArrowLeft, ArrowRight, Bell, CalendarDays, Check, CircleUserRound, CreditCard, Dumbbell, Heart, LogOut, MapPin, Menu, Pause, Play, Search, ShieldCheck, Star, Trophy, X } from 'lucide-react';
+import { api, AppNotification, Booking, Coach, CoachProfile, Court, PlatformStats, Review, Role, SKILL_LEVELS, SkillLevel, SportCategory, TimeSlot, User } from './services/api';
 import { EmptyState, ErrorMessage, Loading, Stat } from './components/shared';
 import Checkout from './pages/Checkout';
 import ReviewForm from './pages/ReviewForm';
@@ -188,17 +188,22 @@ function CoachDetails({ session }: { session: Session | null }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [booking, setBooking] = useState(false);
   const [selectedSportCategoryId, setSelectedSportCategoryId] = useState('');
+  const [courts, setCourts] = useState<Court[]>([]);
+  const [selectedCourtId, setSelectedCourtId] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
   const coachesBase = useCoachesBase();
 
   useEffect(() => {
-    Promise.all([api.coach(id), api.availability(id), api.coachReviews(id)])
-      .then(([c, a, r]) => {
+    // A courts hiccup shouldn't hide the coach; the API still enforces the rule.
+    Promise.all([api.coach(id), api.availability(id), api.coachReviews(id), api.courts().catch(() => ({ data: [] as Court[] }))])
+      .then(([c, a, r, ct]) => {
         setCoach(c.data);
         setSlots(a.data?.timeSlots || []);
         setReviews(r.data || []);
+        setCourts(ct.data || []);
+        setSelectedCourtId(ct.data?.length === 1 ? ct.data[0].id : '');
         setSelectedSportCategoryId(c.data.specializations?.[0]?.sportCategoryId || '');
       })
       .catch((e) => setMessage(e instanceof Error ? e.message : 'Could not load this coach.'))
@@ -212,10 +217,11 @@ function CoachDetails({ session }: { session: Session | null }) {
     if (!session) { navigate('/login'); return; }
     if (!selected.length) { setMessage('Choose at least one available time first.'); return; }
     if (!selectedSportCategoryId) { setMessage('Choose a sport for this session.'); return; }
+    if (courts.length && !selectedCourtId) { setMessage('Choose a court for your session.'); return; }
     setBooking(true);
     setMessage('');
     try {
-      await api.createBookings({ coachId: coach.id, timeSlotIds: selected, sportCategoryId: selectedSportCategoryId });
+      await api.createBookings({ coachId: coach.id, timeSlotIds: selected, sportCategoryId: selectedSportCategoryId, courtId: selectedCourtId || undefined });
       navigate('/dashboard/bookings');
     } catch (e) {
       setMessage(e instanceof Error ? e.message : 'Could not create booking.');
@@ -291,6 +297,13 @@ function CoachDetails({ session }: { session: Session | null }) {
         <p className="eyebrow">BOOK A SESSION</p>
         <div className="price"><strong>₱{Number(coach.hourlyRate || 0)}</strong><span>/ session</span></div>
         {(coach.specializations?.length || 0) > 0 && <label>Sport for this session<select value={selectedSportCategoryId} onChange={(e) => setSelectedSportCategoryId(e.target.value)}><option value="">Choose a sport</option>{coach.specializations?.map((specialization) => <option key={specialization.sportCategoryId} value={specialization.sportCategoryId}>{specialization.sportCategory?.name || 'Coaching'}</option>)}</select></label>}
+        {courts.length > 0 && <label className="court-pick">Court
+          <select value={selectedCourtId} onChange={(e) => { setSelectedCourtId(e.target.value); setMessage(''); }} required>
+            <option value="">Choose a court</option>
+            {courts.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          {(() => { const c = courts.find((x) => x.id === selectedCourtId); return c?.address ? <small className="court-address"><MapPin size={13} /> {c.address}</small> : null; })()}
+        </label>}
         <p style={{ fontSize: '.78rem', fontWeight: 700, margin: '14px 0 8px' }}>Pick one or more times</p>
         {slots.length === 0 ? <p className="muted" style={{ fontSize: '.8rem' }}>No open times right now — check back soon.</p> : (
           <div style={{ maxHeight: 280, overflowY: 'auto', marginBottom: 12, paddingRight: 4 }}>
@@ -570,7 +583,8 @@ function BookingRow({ booking, viewerRole, onChanged, payViaGroup = false }: { b
       <div className="booking-date"><strong>{booking.timeSlot?.date ? new Date(`${booking.timeSlot.date}T00:00:00`).toLocaleDateString('en-US', { day: '2-digit' }) : '--'}</strong><span>{booking.timeSlot?.date ? new Date(`${booking.timeSlot.date}T00:00:00`).toLocaleDateString('en-US', { month: 'short' }) : 'TBD'}</span></div>
       <div className="booking-info">
         <strong>{otherPartyName}</strong>
-        <span>{booking.sportCategory?.name || 'Training'} · {booking.timeSlot?.startTime || 'Time pending'}</span>
+        <span>{booking.sportCategory?.name || 'Training'} · {booking.timeSlot?.startTime?.slice(0, 5) || 'Time pending'}</span>
+        {booking.court && <span className="booking-court" title={booking.court.address || undefined}><MapPin size={12} /> {booking.court.name}{booking.court.address ? ` · ${booking.court.address}` : ''}</span>}
         {awaitingGcash && <span style={{ color: 'var(--orange)' }}>GCash ref {booking.payment?.gcashReference} · awaiting confirmation{booking.checkoutId ? ' · covers every session paid with this reference' : ''}</span>}
         {awaitingPlatform && <span style={{ color: 'var(--orange)' }}>{viewerRole === 'coach' ? 'Client paid the platform' : 'Paid'} · ref {booking.payment?.gcashReference} · waiting for the platform to verify</span>}
         {booking.payment?.provider === 'platform_qr' && booking.payment?.status === 'failed' && viewerRole === 'client' && <span style={{ color: 'var(--danger)' }}>Payment ref {booking.payment.gcashReference} couldn’t be verified — please pay again or contact support</span>}

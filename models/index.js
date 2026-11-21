@@ -14,6 +14,7 @@ const Payment = require('./payment.model')(sequelize, DataTypes);
 const Review = require('./review.model')(sequelize, DataTypes);
 const Notification = require('./notification.model')(sequelize, DataTypes);
 const Message = require('./message.model')(sequelize, DataTypes);
+const Court = require('./court.model')(sequelize, DataTypes);
 
 // ---- Associations ----
 
@@ -54,6 +55,8 @@ Coach.hasMany(Booking, { foreignKey: 'coachId', as: 'bookings' });
 Booking.belongsTo(Coach, { foreignKey: 'coachId', as: 'coach' });
 SportCategory.hasMany(Booking, { foreignKey: 'sportCategoryId', as: 'bookings' });
 Booking.belongsTo(SportCategory, { foreignKey: 'sportCategoryId', as: 'sportCategory' });
+Court.hasMany(Booking, { foreignKey: 'courtId', as: 'bookings' });
+Booking.belongsTo(Court, { foreignKey: 'courtId', as: 'court' });
 
 // Self-reference for rescheduling history
 Booking.belongsTo(Booking, { foreignKey: 'rescheduledFromId', as: 'rescheduledFrom' });
@@ -97,4 +100,5 @@ module.exports = {
   Review,
   Notification,
   Message,
+  Court,
 };

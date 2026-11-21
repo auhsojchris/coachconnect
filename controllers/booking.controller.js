@@ -1,5 +1,5 @@
 const { Op } = require('sequelize');
-const { Booking, Coach, User, TimeSlot, SportCategory, Payment } = require('../models');
+const { Booking, Coach, User, TimeSlot, SportCategory, Payment, Court } = require('../models');
 const ApiError = require('../utils/ApiError');
 const catchAsync = require('../utils/catchAsync');
 const { sendResponse } = require('../utils/ApiResponse');
@@ -11,6 +11,7 @@ const bookingInclude = [
   { model: Coach, as: 'coach', include: [{ model: User, as: 'user', attributes: ['id', 'name', 'email'] }] },
   { model: TimeSlot, as: 'timeSlot' },
   { model: SportCategory, as: 'sportCategory' },
+  { model: Court, as: 'court', attributes: ['id', 'name', 'address'] },
   { model: Payment, as: 'payment' },
 ];
 
@@ -84,12 +85,13 @@ const getBookingById = catchAsync(async (req, res) => {
 const createBooking = catchAsync(async (req, res) => {
   if (req.user.role.name !== 'client') throw ApiError.forbidden('Only clients can create bookings');
 
-  const { coachId, timeSlotId, sportCategoryId, notes } = req.body;
+  const { coachId, timeSlotId, sportCategoryId, courtId, notes } = req.body;
   const booking = await bookingService.createBooking({
     clientId: req.user.id,
     coachId,
     timeSlotId,
     sportCategoryId,
+    courtId,
     notes,
   });
 
@@ -102,12 +104,13 @@ const createBooking = catchAsync(async (req, res) => {
 const createBookingsBatch = catchAsync(async (req, res) => {
   if (req.user.role.name !== 'client') throw ApiError.forbidden('Only clients can create bookings');
 
-  const { coachId, timeSlotIds, sportCategoryId, notes } = req.body;
+  const { coachId, timeSlotIds, sportCategoryId, courtId, notes } = req.body;
   const created = await bookingService.createBookings({
     clientId: req.user.id,
     coachId,
     timeSlotIds,
     sportCategoryId,
+    courtId,
     notes,
   });
 

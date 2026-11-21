@@ -10,6 +10,8 @@ module.exports = (sequelize, DataTypes) => {
       // Shared by bookings created (and paid for) together in one checkout.
       checkoutId: { type: DataTypes.UUID, allowNull: true },
       sportCategoryId: { type: DataTypes.UUID, allowNull: false },
+      // Where the session happens. Null on bookings made before courts existed.
+      courtId: { type: DataTypes.UUID, allowNull: true },
       status: {
         type: DataTypes.ENUM('pending', 'confirmed', 'completed', 'cancelled'),
         allowNull: false,

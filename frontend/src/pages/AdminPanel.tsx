@@ -5,8 +5,9 @@ import { Loading } from '../components/shared';
 import Overview from './AdminOverview';
 import PayoutsPanel from './AdminPayouts';
 import { CommissionsByCoachPanel, PaymentsHistory } from './AdminFinance';
+import CourtsPanel from './AdminCourts';
 
-type Tab = 'overview' | 'payments' | 'users' | 'categories' | 'reviews' | 'commissions' | 'payouts' | 'settings';
+type Tab = 'overview' | 'payments' | 'users' | 'categories' | 'courts' | 'reviews' | 'commissions' | 'payouts' | 'settings';
 
 export default function AdminPanel() {
   const [tab, setTab] = useState<Tab>('overview');
@@ -15,7 +16,7 @@ export default function AdminPanel() {
   return <div className="content-page">
     <div className="dash-header"><div><p className="eyebrow">ADMIN COMMAND CENTER</p><h1>System overview</h1><p className="muted">A clear view of what is moving through CoachConnect.</p></div></div>
     <div className="tab-strip">
-      {(['overview', 'payments', 'users', 'categories', 'reviews', 'commissions', 'payouts', 'settings'] as Tab[]).map((t) => (
+      {(['overview', 'payments', 'users', 'categories', 'courts', 'reviews', 'commissions', 'payouts', 'settings'] as Tab[]).map((t) => (
         <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{t[0].toUpperCase() + t.slice(1)}</button>
       ))}
     </div>
@@ -26,6 +27,7 @@ export default function AdminPanel() {
     </div>}
     {tab === 'users' && <UsersPanel />}
     {tab === 'categories' && <CategoriesPanel />}
+    {tab === 'courts' && <CourtsPanel />}
     {tab === 'reviews' && <ReviewsPanel />}
     {tab === 'commissions' && <CommissionsByCoachPanel />}
     {tab === 'payouts' && <PayoutsPanel />}
