@@ -15,7 +15,9 @@ export interface Booking { id: string; status: string; price: number; checkoutId
 export interface Review { id: string; rating: number; comment?: string; isApproved?: boolean; isFlagged?: boolean; flagReason?: string; createdAt: string; client?: User; coach?: Coach; booking?: Booking; }
 export interface AppNotification { id: string; title: string; message: string; isRead: boolean; createdAt: string; }
 export interface Message { id: string; content: string; isRead: boolean; createdAt: string; sender?: User; recipient?: User; bookingId: string; }
-export interface DashboardStats { totalUsers: number; totalCoaches: number; totalClients: number; totalRevenue: number; bookingsByStatus: Record<string, number>; reviewsPendingModeration: number; recentBookings: Booking[]; gcashCommissionOwed: number; gcashPayoutOwed: number; totalCommissionEarned: number; }
+export interface DashboardStats { totalUsers: number; totalCoaches: number; totalClients: number; totalRevenue: number; bookingsByStatus: Record<string, number>; reviewsPendingModeration: number; recentBookings: Booking[]; gcashCommissionOwed: number; gcashPayoutOwed: number; totalCommissionEarned: number; verifiedCoaches: number; overview: AdminOverview; }
+export interface PeriodTotals { revenue: number; commission: number; bookings: number; completedSessions: number; newClients: number; newCoaches: number; }
+export interface AdminOverview { range: number; since: string; current: PeriodTotals; previous: PeriodTotals; trend: { date: string; days: number; revenue: number; bookings: number }[]; topCoaches: { coachId: string; name: string; revenue: number; sessions: number; averageRating: number }[]; attention: { qrPaymentsToVerify: number; qrAmountToVerify: number; unverifiedCoaches: number }; upcomingSessions: number; }
 export interface SavedPaymentMethod { id: string; brand: string; last4: string; expMonth: number; expYear: number; isDefault: boolean; }
 export interface PlatformStats { coachCount: number; sportCount: number; completedSessions: number; averageRating: number | null; reviewCount: number; }
 
@@ -160,7 +162,7 @@ export const api = {
   markNotificationRead: (id: string) => request<{ data: AppNotification }>(`/notifications/${id}/read`, { method: 'PUT' }),
 
   // ---- Admin ----
-  adminStats: () => request<{ data: DashboardStats }>('/admin/dashboard/stats'),
+  adminStats: (range = 30) => request<{ data: DashboardStats }>(`/admin/dashboard/stats?range=${range}`),
   adminUsers: (filters: Partial<{ role: Role; isActive: boolean; search: string }> = {}) => request<{ data: User[]; meta?: { total: number } }>(`/admin/users${qs(filters)}`),
   adminCreateUser: (payload: { name: string; email: string; password: string; phone?: string; role: Role }) => request<{ data: User }>('/admin/users', { method: 'POST', body: JSON.stringify(payload) }),
   adminUpdateUser: (id: string, payload: Partial<{ name: string; phone: string; role: Role; isActive: boolean; emailVerified: boolean }>) => request<{ data: User }>(`/admin/users/${id}`, { method: 'PUT', body: JSON.stringify(payload) }),

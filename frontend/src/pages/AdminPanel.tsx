@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import { CircleUserRound, Dumbbell, Flag, Percent, ShieldCheck, Users } from 'lucide-react';
-import { api, DashboardStats, Payment, Review, Role, SportCategory, User } from '../services/api';
-import { Loading, Stat } from '../components/shared';
+import { Flag, ShieldCheck } from 'lucide-react';
+import { api, Payment, Review, Role, SportCategory, User } from '../services/api';
+import { Loading } from '../components/shared';
+import Overview from './AdminOverview';
 
 type Tab = 'overview' | 'payments' | 'users' | 'categories' | 'reviews' | 'commissions' | 'payouts' | 'settings';
 
@@ -14,7 +15,7 @@ export default function AdminPanel() {
         <button key={t} className={`tab-btn ${tab === t ? 'active' : ''}`} onClick={() => setTab(t)}>{t[0].toUpperCase() + t.slice(1)}</button>
       ))}
     </div>
-    {tab === 'overview' && <Overview />}
+    {tab === 'overview' && <Overview onNavigate={setTab} />}
     {tab === 'payments' && <QrPaymentsPanel />}
     {tab === 'users' && <UsersPanel />}
     {tab === 'categories' && <CategoriesPanel />}
@@ -23,44 +24,6 @@ export default function AdminPanel() {
     {tab === 'payouts' && <PayoutsPanel />}
     {tab === 'settings' && <SettingsPanel />}
   </div>;
-}
-
-function Overview() {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  useEffect(() => { api.adminStats().then((r) => setStats(r.data)).catch(() => {}); }, []);
-  if (!stats) return <Loading />;
-  return <>
-    <div className="stat-grid">
-      <Stat label="Total users" value={String(stats.totalUsers)} icon={<Users />} />
-      <Stat label="Active coaches" value={String(stats.totalCoaches)} icon={<Dumbbell />} />
-      <Stat label="Athletes" value={String(stats.totalClients)} icon={<CircleUserRound />} />
-      <Stat label="Revenue" value={`₱${Number(stats.totalRevenue).toLocaleString()}`} icon={<span>₱</span>} />
-      <Stat label="Total commission" value={`₱${stats.totalCommissionEarned.toLocaleString()}`} icon={<Percent />} />
-    </div>
-    {stats.gcashCommissionOwed > 0 && (
-      <p className="muted" style={{ marginBottom: 8 }}>
-        <strong style={{ color: 'var(--orange)' }}>₱{stats.gcashCommissionOwed.toLocaleString()}</strong> in GCash commission owed by coaches — see the Commissions tab.
-      </p>
-    )}
-    {stats.gcashPayoutOwed > 0 && (
-      <p className="muted" style={{ marginBottom: 24 }}>
-        <strong style={{ color: 'var(--turf-dark)' }}>₱{stats.gcashPayoutOwed.toLocaleString()}</strong> owed to coaches from payments the platform collected — see the Payouts tab.
-      </p>
-    )}
-    <div className="dash-columns">
-      <section className="dash-panel">
-        <div className="panel-heading"><div><p className="eyebrow">BOOKINGS</p><h2>Booking health</h2></div></div>
-        {Object.entries(stats.bookingsByStatus).map(([key, value]) => (
-          <div className="bar-row" key={key}><span>{key}</span><div><i style={{ width: `${Math.min(100, value * 8 + 5)}%` }} /></div><strong>{value}</strong></div>
-        ))}
-      </section>
-      <section className="dash-panel accent-panel">
-        <p className="eyebrow">MODERATION QUEUE</p>
-        <h2>{stats.reviewsPendingModeration} reviews flagged</h2>
-        <p>Keep the community helpful, honest, and useful for every athlete.</p>
-      </section>
-    </div>
-  </>;
 }
 
 /** One client checkout paid with one QR transfer: all its sessions resolve together. */

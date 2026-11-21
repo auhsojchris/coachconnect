@@ -106,7 +106,134 @@ const verifyCoach = catchAsync(async (req, res) => {
 });
 
 // GET /api/admin/dashboard/stats
+// ---- Overview analytics ------------------------------------------------
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Days are bucketed in Philippine time (UTC+8, no DST) so "today" matches
+// what admins see on the wall clock.
+const TZ_OFFSET_MS = 8 * 60 * 60 * 1000;
+const localDay = (date) => new Date(new Date(date).getTime() + TZ_OFFSET_MS).toISOString().slice(0, 10);
+const money = (n) => Math.round(Number(n || 0) * 100) / 100;
+const ALLOWED_RANGES = [7, 30, 90];
+
+/** Start (inclusive) of the local day `daysAgo` days before today, as a UTC Date. */
+function startOfLocalDay(daysAgo) {
+  const today = localDay(new Date());
+  return new Date(new Date(`${today}T00:00:00Z`).getTime() - TZ_OFFSET_MS - daysAgo * DAY_MS);
+}
+
+/**
+ * Period analytics for the admin Overview: totals for the selected range and
+ * the same-length period before it (for "vs previous" deltas), a revenue
+ * trend (daily for 7/30 days, weekly for 90), top coaches by revenue, and
+ * counts of things waiting on an admin. Sums are done in JS over the
+ * period's rows so it behaves the same on MySQL (dev) and Postgres (prod).
+ */
+async function buildOverview(days) {
+  const start = startOfLocalDay(days - 1);
+  const prevStart = new Date(start.getTime() - days * DAY_MS);
+  const now = new Date();
+
+  const [payments, bookings, users, attentionQr, unverifiedCoaches, upcomingSessions] = await Promise.all([
+    // paidAt can be missing on older rows; fall back to when the row was last updated.
+    Payment.findAll({
+      where: {
+        status: 'paid',
+        [Op.or]: [{ paidAt: { [Op.gte]: prevStart } }, { paidAt: null, updatedAt: { [Op.gte]: prevStart } }],
+      },
+      attributes: ['amount', 'platformFeeAmount', 'paidAt', 'updatedAt'],
+      include: [{ model: Booking, as: 'booking', attributes: ['coachId'] }],
+    }),
+    Booking.findAll({ where: { createdAt: { [Op.gte]: prevStart } }, attributes: ['status', 'createdAt'] }),
+    User.findAll({
+      where: { createdAt: { [Op.gte]: prevStart } },
+      attributes: ['createdAt'],
+      include: [{ model: Role, as: 'role', attributes: ['name'] }],
+    }),
+    Payment.findAll({ where: { provider: 'platform_qr', status: 'submitted' }, attributes: ['amount'] }),
+    Coach.count({ where: { isVerified: false } }),
+    Booking.count({
+      where: { status: 'confirmed' },
+      include: [{
+        model: TimeSlot,
+        as: 'timeSlot',
+        required: true,
+        where: { date: { [Op.between]: [localDay(now), localDay(new Date(now.getTime() + 6 * DAY_MS))] } },
+      }],
+    }),
+  ]);
+
+  const inCurrent = (d) => new Date(d) >= start;
+  const empty = () => ({ revenue: 0, commission: 0, bookings: 0, completedSessions: 0, newClients: 0, newCoaches: 0 });
+  const current = empty();
+  const previous = empty();
+
+  // Trend buckets: one per day, or one per 7 days (oldest first) for 90 days.
+  const bucketDays = days > 30 ? 7 : 1;
+  const trend = [];
+  for (let i = 0; i < days; i += bucketDays) {
+    trend.push({ date: localDay(new Date(start.getTime() + i * DAY_MS)), days: Math.min(bucketDays, days - i), revenue: 0, bookings: 0 });
+  }
+  const bucketFor = (d) => trend[Math.min(trend.length - 1, Math.floor((new Date(d) - start) / DAY_MS / bucketDays))];
+
+  const revenueByCoach = new Map();
+  for (const p of payments) {
+    const when = p.paidAt || p.updatedAt;
+    const target = inCurrent(when) ? current : previous;
+    target.revenue += Number(p.amount);
+    target.commission += Number(p.platformFeeAmount || 0);
+    if (target === current) {
+      bucketFor(when).revenue += Number(p.amount);
+      const coachId = p.booking?.coachId;
+      if (coachId) {
+        const row = revenueByCoach.get(coachId) || { coachId, revenue: 0, sessions: 0 };
+        row.revenue += Number(p.amount);
+        row.sessions += 1;
+        revenueByCoach.set(coachId, row);
+      }
+    }
+  }
+  for (const b of bookings) {
+    const target = inCurrent(b.createdAt) ? current : previous;
+    target.bookings += 1;
+    if (b.status === 'completed') target.completedSessions += 1;
+    if (target === current) bucketFor(b.createdAt).bookings += 1;
+  }
+  for (const u of users) {
+    const target = inCurrent(u.createdAt) ? current : previous;
+    if (u.role?.name === 'client') target.newClients += 1;
+    if (u.role?.name === 'coach') target.newCoaches += 1;
+  }
+
+  const top = [...revenueByCoach.values()].sort((a, b) => b.revenue - a.revenue).slice(0, 5);
+  const coaches = top.length
+    ? await Coach.findAll({ where: { id: top.map((t) => t.coachId) }, attributes: ['id', 'averageRating'], include: [{ model: User, as: 'user', attributes: ['name'] }] })
+    : [];
+  const coachById = new Map(coaches.map((c) => [c.id, c]));
+
+  const round = (o) => ({ ...o, revenue: money(o.revenue), commission: money(o.commission) });
+  return {
+    range: days,
+    since: localDay(start),
+    current: round(current),
+    previous: round(previous),
+    trend: trend.map((t) => ({ ...t, revenue: money(t.revenue) })),
+    topCoaches: top.map((t) => ({
+      ...t,
+      revenue: money(t.revenue),
+      name: coachById.get(t.coachId)?.user?.name || 'Coach',
+      averageRating: Number(coachById.get(t.coachId)?.averageRating || 0),
+    })),
+    attention: {
+      qrPaymentsToVerify: attentionQr.length,
+      qrAmountToVerify: money(attentionQr.reduce((s, p) => s + Number(p.amount), 0)),
+      unverifiedCoaches,
+    },
+    upcomingSessions,
+  };
+}
+
 const getDashboardStats = catchAsync(async (req, res) => {
+  const range = ALLOWED_RANGES.includes(Number(req.query.range)) ? Number(req.query.range) : 30;
   const [
     totalUsers,
     totalCoaches,
@@ -118,6 +245,8 @@ const getDashboardStats = catchAsync(async (req, res) => {
     commissionOwed,
     payoutOwed,
     totalCommissionEarned,
+    verifiedCoaches,
+    overview,
   ] = await Promise.all([
     User.count(),
     User.count({ include: { model: Role, as: 'role', where: { name: 'coach' } } }),
@@ -133,13 +262,23 @@ const getDashboardStats = catchAsync(async (req, res) => {
       raw: true,
     }),
     Review.count({ where: { isFlagged: true } }),
-    Booking.findAll({ limit: 10, order: [['createdAt', 'DESC']] }),
+    Booking.findAll({
+      limit: 8,
+      order: [['createdAt', 'DESC']],
+      include: [
+        { model: User, as: 'client', attributes: ['id', 'name'] },
+        { model: Coach, as: 'coach', attributes: ['id'], include: [{ model: User, as: 'user', attributes: ['id', 'name'] }] },
+        { model: TimeSlot, as: 'timeSlot', attributes: ['date', 'startTime', 'endTime'] },
+      ],
+    }),
     Payment.sum('platformFeeAmount', { where: { provider: 'gcash', status: 'paid', platformFeeSettled: false } }),
     Payment.sum('payoutAmount', { where: { provider: { [Op.in]: PLATFORM_HELD }, status: 'paid', payoutSettled: false } }),
     // All-time platform commission across both GCash paths (manual and
     // PayMongo), regardless of settlement status — the total the platform
     // has earned, not just what's still outstanding.
     Payment.sum('platformFeeAmount', { where: { status: 'paid' } }),
+    Coach.count({ where: { isVerified: true } }),
+    buildOverview(range),
   ]);
 
   sendResponse(res, 200, 'Dashboard statistics retrieved', {
@@ -153,6 +292,8 @@ const getDashboardStats = catchAsync(async (req, res) => {
     gcashCommissionOwed: Number(commissionOwed) || 0,
     gcashPayoutOwed: Number(payoutOwed) || 0,
     totalCommissionEarned: Number(totalCommissionEarned) || 0,
+    verifiedCoaches,
+    overview,
   });
 });
 
