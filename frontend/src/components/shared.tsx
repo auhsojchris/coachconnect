@@ -1,5 +1,5 @@
 import { ArrowRight, CalendarDays, X } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 
 export function Stat({ label, value, icon }: { label: string; value: string; icon: JSX.Element }) {
   return <div className="stat"><span>{icon}</span><div><strong>{value}</strong><small>{label}</small></div></div>;
@@ -10,7 +10,8 @@ export function Loading() {
 }
 
 export function EmptyState({ compact = false, title = 'Nothing here yet', copy = 'Check back once there’s activity to show.' }: { compact?: boolean; title?: string; copy?: string }) {
-  return <div className={compact ? 'empty compact' : 'empty'}><CalendarDays size={28} /><h3>{title}</h3><p>{copy}</p>{!compact && <Link className="button" to="/coaches">Explore coaches <ArrowRight size={16} /></Link>}</div>;
+  const coachesBase = useLocation().pathname.startsWith('/dashboard') ? '/dashboard/coaches' : '/coaches';
+  return <div className={compact ? 'empty compact' : 'empty'}><CalendarDays size={28} /><h3>{title}</h3><p>{copy}</p>{!compact && <Link className="button" to={coachesBase}>Explore coaches <ArrowRight size={16} /></Link>}</div>;
 }
 
 export function ErrorMessage({ text }: { text: string }) {

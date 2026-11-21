@@ -40,8 +40,12 @@ function App() {
   </Routes>;
 }
 
+// Inside the dashboard, coach pages render within it so the sidebar stays put.
+function useCoachesBase() { return useLocation().pathname.startsWith('/dashboard') ? '/dashboard/coaches' : '/coaches'; }
+
 function Layout({ session, onLogout }: { session: Session | null; onLogout: () => void }) {
   const [open, setOpen] = useState(false);
+  const coachesBase = useCoachesBase();
   const location = useLocation();
   const navigate = useNavigate();
   useEffect(() => setOpen(false), [location.pathname]);
@@ -49,7 +53,7 @@ function Layout({ session, onLogout }: { session: Session | null; onLogout: () =
   return <div className="site-shell">
     <header className="topbar"><Link to="/explore" className="brand"><span className="brand-mark"><Dumbbell size={18} /></span> COACHCONNECT</Link>
       <button className="mobile-menu icon-btn" onClick={() => setOpen(!open)} aria-label="Toggle menu">{open ? <X /> : <Menu />}</button>
-      <nav className={open ? 'main-nav open' : 'main-nav'}><Link to="/explore">Home</Link><Link to="/coaches">Find a coach</Link><Link to="/about">How it works</Link><Link to="/contact">Contact</Link>
+      <nav className={open ? 'main-nav open' : 'main-nav'}><Link to="/explore">Home</Link><Link to={coachesBase}>Find a coach</Link><Link to="/about">How it works</Link><Link to="/contact">Contact</Link>
         {session ? <><Link className="nav-dashboard" to="/dashboard">Dashboard <ArrowRight size={15} /></Link><button className="text-btn" onClick={logout}>Log out</button></> : <><Link className="text-btn" to="/login">Log in</Link><Link className="button small" to="/register">Get started <ArrowRight size={15} /></Link></>}
       </nav>
     </header>
@@ -164,7 +168,7 @@ function CoachDirectory() {
   </section>;
 }
 
-function CoachCard({ coach }: { coach: Coach }) { const tags = coach.specializations?.map((s) => s.sportCategory?.name).filter(Boolean) as string[] || []; return <Link className="coach-card" to={`/coaches/${coach.id}`}><div className="coach-photo">{coach.user?.profileImage ? <img className="coach-photo-image" src={coach.user.profileImage} alt={`${coach.user.name || 'Coach'} profile`} /> : <div className="avatar-large">{coach.user?.name?.slice(0, 1) || 'C'}</div>}{coach.isVerified && <span className="verified"><Check size={13} /> Verified</span>}<button className="heart-btn" onClick={(e) => e.preventDefault()} aria-label="Save coach"><Heart size={18} /></button></div><div className="coach-body"><div className="coach-name"><div><h3>{coach.user?.name || 'Coach'}</h3><p>{coach.city || coach.location || 'Online coaching'}</p></div><span className="rating"><Star size={14} fill="currentColor" /> {Number(coach.averageRating || 0).toFixed(1)}</span></div><div className="tag-row">{(tags.length ? tags : ['Performance']).slice(0, 2).map((tag) => <span key={tag}>{tag}</span>)}</div><div className="card-footer"><strong>₱{Number(coach.hourlyRate || 0)} <small>/ session</small></strong><span>View profile <ArrowRight size={15} /></span></div></div></Link>; }
+function CoachCard({ coach }: { coach: Coach }) { const coachesBase = useCoachesBase(); const tags = coach.specializations?.map((s) => s.sportCategory?.name).filter(Boolean) as string[] || []; return <Link className="coach-card" to={`${coachesBase}/${coach.id}`}><div className="coach-photo">{coach.user?.profileImage ? <img className="coach-photo-image" src={coach.user.profileImage} alt={`${coach.user.name || 'Coach'} profile`} /> : <div className="avatar-large">{coach.user?.name?.slice(0, 1) || 'C'}</div>}{coach.isVerified && <span className="verified"><Check size={13} /> Verified</span>}<button className="heart-btn" onClick={(e) => e.preventDefault()} aria-label="Save coach"><Heart size={18} /></button></div><div className="coach-body"><div className="coach-name"><div><h3>{coach.user?.name || 'Coach'}</h3><p>{coach.city || coach.location || 'Online coaching'}</p></div><span className="rating"><Star size={14} fill="currentColor" /> {Number(coach.averageRating || 0).toFixed(1)}</span></div><div className="tag-row">{(tags.length ? tags : ['Performance']).slice(0, 2).map((tag) => <span key={tag}>{tag}</span>)}</div><div className="card-footer"><strong>₱{Number(coach.hourlyRate || 0)} <small>/ session</small></strong><span>View profile <ArrowRight size={15} /></span></div></div></Link>; }
 
 // Matches MAX_SLOTS_PER_CHECKOUT in the backend booking validator.
 const MAX_SLOTS_PER_CHECKOUT = 10;
@@ -187,6 +191,7 @@ function CoachDetails({ session }: { session: Session | null }) {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
+  const coachesBase = useCoachesBase();
 
   useEffect(() => {
     Promise.all([api.coach(id), api.availability(id), api.coachReviews(id)])
@@ -235,7 +240,7 @@ function CoachDetails({ session }: { session: Session | null }) {
   const achievements = [...(coach.achievements || [])].sort((a, b) => (b.year || 0) - (a.year || 0));
 
   return <section className="coach-detail">
-    <Link to="/coaches" className="backlink">← Back to coaches</Link>
+    <Link to={coachesBase} className="backlink">← Back to coaches</Link>
     <div className="detail-layout">
       <div className="detail-profile">
         <div className="detail-avatar">{coach.user?.profileImage ? <img className="detail-avatar-image" src={coach.user.profileImage} alt={`${coach.user.name || 'Coach'} profile`} /> : coach.user?.name?.slice(0, 1) || 'C'}</div>
@@ -346,7 +351,7 @@ function Dashboard({ session, onLogout, onUserChange }: { session: Session; onLo
       <div className="sidebar-top"><Link to="/explore" className="brand"><span className="brand-mark"><Dumbbell size={18} /></span> COACHCONNECT</Link><button className="icon-btn" onClick={() => setMobile(false)}><X /></button></div>
       <p className="side-label">WORKSPACE</p>
       <Link className={`side-link ${isActive('/dashboard') ? 'active' : ''}`} to="/dashboard"><CalendarDays size={17} /> Overview</Link>
-      {role === 'client' && <Link className="side-link" to="/coaches"><Search size={17} /> Find a coach</Link>}
+      {role === 'client' && <Link className={`side-link ${location.pathname.startsWith('/dashboard/coaches') ? 'active' : ''}`} to="/dashboard/coaches"><Search size={17} /> Find a coach</Link>}
       <Link className={`side-link ${isActive('/dashboard/bookings') ? 'active' : ''}`} to="/dashboard/bookings"><Check size={17} /> Bookings</Link>
       {role !== 'admin' && <Link className={`side-link ${isActive('/dashboard/messages') ? 'active' : ''}`} to="/dashboard/messages"><Bell size={17} /> Messages{unreadMessages > 0 && <span className="message-badge">{unreadMessages > 99 ? '99+' : unreadMessages}</span>}</Link>}
       <Link className={`side-link ${isActive('/dashboard/profile') ? 'active' : ''}`} to="/dashboard/profile"><CircleUserRound size={17} /> My profile</Link>
@@ -364,6 +369,8 @@ function Dashboard({ session, onLogout, onUserChange }: { session: Session; onLo
       <div className="dash-mobile-top"><button className="icon-btn" onClick={() => setMobile(true)}><Menu /></button><span>Overview</span><Bell size={18} /></div>
       <Routes>
         <Route index element={<Overview session={session} />} />
+        <Route path="coaches" element={role === 'client' ? <CoachDirectory /> : <Navigate to="/coaches" />} />
+        <Route path="coaches/:id" element={role === 'client' ? <CoachDetails session={session} /> : <Navigate to="/coaches" />} />
         <Route path="bookings" element={<Bookings viewerRole={role} />} />
         <Route path="profile" element={<AccountPage user={session.user} onUserChange={onUserChange} />} />
         <Route path="messages" element={role !== 'admin' ? <MessagesPage role={role as 'client' | 'coach'} user={session.user} /> : <Navigate to="/dashboard" />} />
@@ -427,7 +434,7 @@ function Overview({ session }: { session: Session }) {
   return <>
     <div className="dash-header">
       <div><p className="eyebrow">{new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase()}</p><h1>Good morning, {session.user.name.split(' ')[0]}.</h1><p className="muted">Keep the momentum going.</p></div>
-      {role === 'client' && <Link className="button" to="/coaches">Book a session <ArrowRight size={16} /></Link>}
+      {role === 'client' && <Link className="button" to="/dashboard/coaches">Book a session <ArrowRight size={16} /></Link>}
       {role === 'coach' && <Link className="button" to="/dashboard/coach/profile">Edit coach profile <ArrowRight size={16} /></Link>}
     </div>
     <div className="stat-grid">
@@ -462,7 +469,7 @@ function Overview({ session }: { session: Session }) {
       {role === 'coach' ? <CoachProfileStrength coach={coachProfile} /> : (
         <section className="dash-panel accent-panel">
           <p className="eyebrow">A LITTLE NUDGE</p><h2>Consistency beats intensity.</h2><p>One focused session today can change the shape of your whole week.</p>
-          <Link className="underlink" to="/coaches">Find your next session <ArrowRight size={16} /></Link>
+          <Link className="underlink" to="/dashboard/coaches">Find your next session <ArrowRight size={16} /></Link>
         </section>
       )}
     </div>
@@ -485,7 +492,7 @@ function Bookings({ viewerRole }: { viewerRole: Role }) {
   const groupedIds = new Set(unpaidCheckouts.flat().map((b) => b.id));
 
   return <div className="content-page">
-    <div className="dash-header"><div><p className="eyebrow">{viewerRole === 'coach' ? 'MANAGE YOUR SESSIONS' : 'YOUR TRAINING LOG'}</p><h1>Bookings</h1></div>{viewerRole === 'client' && <Link className="button" to="/coaches">New booking <ArrowRight size={16} /></Link>}</div>
+    <div className="dash-header"><div><p className="eyebrow">{viewerRole === 'coach' ? 'MANAGE YOUR SESSIONS' : 'YOUR TRAINING LOG'}</p><h1>Bookings</h1></div>{viewerRole === 'client' && <Link className="button" to="/dashboard/coaches">New booking <ArrowRight size={16} /></Link>}</div>
     {!loading && unpaidCheckouts.map((group) => <CheckoutGroup key={`${group[0].coach!.id}:${group.map((b) => b.id).sort().join(',')}`} bookings={group} onChanged={refresh} />)}
     <div className="dash-panel">{loading ? <Loading /> : items.length ? items.map((item) => <BookingRow key={item.id} booking={item} viewerRole={viewerRole} onChanged={refresh} payViaGroup={groupedIds.has(item.id)} />) : <EmptyState compact />}</div>
   </div>;
