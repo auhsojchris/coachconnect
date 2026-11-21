@@ -1,2 +1,5 @@
-frontend
 tests
+.env*
+frontend/node_modules
+frontend/dist
+frontend/.vercel
