@@ -64,4 +64,16 @@ router.put(
   adminController.settleGcashPayout
 );
 
+router.get('/payouts/weekly', adminController.listWeeklyPayouts);
+router.put(
+  '/payouts/settle',
+  [
+    body('paymentIds').isArray({ min: 1, max: 500 }),
+    body('paymentIds.*').isUUID(),
+    body('settled').optional().isBoolean(),
+  ],
+  validate,
+  adminController.settlePayouts
+);
+
 module.exports = router;

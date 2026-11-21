@@ -18,6 +18,12 @@ export interface Message { id: string; content: string; isRead: boolean; created
 export interface DashboardStats { totalUsers: number; totalCoaches: number; totalClients: number; totalRevenue: number; bookingsByStatus: Record<string, number>; reviewsPendingModeration: number; recentBookings: Booking[]; gcashCommissionOwed: number; gcashPayoutOwed: number; totalCommissionEarned: number; verifiedCoaches: number; overview: AdminOverview; }
 export interface PeriodTotals { revenue: number; commission: number; bookings: number; completedSessions: number; newClients: number; newCoaches: number; }
 export interface AdminOverview { range: number; since: string; current: PeriodTotals; previous: PeriodTotals; trend: { date: string; days: number; revenue: number; bookings: number }[]; topCoaches: { coachId: string; name: string; revenue: number; sessions: number; averageRating: number }[]; attention: { qrPaymentsToVerify: number; qrAmountToVerify: number; unverifiedCoaches: number }; upcomingSessions: number; }
+export type PayoutStatusFilter = 'owed' | 'settled' | 'all';
+export type PayoutPeriod = 4 | 12 | 'all';
+export interface PayoutItem { paymentId: string; client: string | null; sessionDate: string | null; startTime: string | null; paidAt: string; provider: string; amount: number; commission: number; net: number; settled: boolean; }
+export interface CoachPayoutLine { coachId: string | null; name: string; email: string | null; gcashNumber: string | null; gcashAccountName: string | null; sessions: number; gross: number; commission: number; net: number; owed: number; settled: number; status: 'owed' | 'settled' | 'partial'; items: PayoutItem[]; }
+export interface PayoutWeek { weekStart: string; weekEnd: string; total: number; owed: number; settled: number; coaches: CoachPayoutLine[]; }
+export interface WeeklyPayouts { status: PayoutStatusFilter; weeks: number | 'all'; summary: { owed: number; settled: number; coachesOwed: number; oldestOwedWeek: string | null }; statements: PayoutWeek[]; }
 export interface SavedPaymentMethod { id: string; brand: string; last4: string; expMonth: number; expYear: number; isDefault: boolean; }
 export interface PlatformStats { coachCount: number; sportCount: number; completedSessions: number; averageRating: number | null; reviewCount: number; }
 
@@ -173,4 +179,6 @@ export const api = {
   adminSettleGcashCommission: (paymentId: string, settled = true) => request<{ data: Payment }>(`/admin/gcash-commissions/${paymentId}/settle`, { method: 'PUT', body: JSON.stringify({ settled }) }),
   adminGcashPayouts: (filters: Partial<{ settled: boolean }> = {}) => request<{ data: Payment[]; meta?: { total: number; totalOwed: number } }>(`/admin/gcash-payouts${qs(filters)}`),
   adminSettleGcashPayout: (paymentId: string, settled = true) => request<{ data: Payment }>(`/admin/gcash-payouts/${paymentId}/settle`, { method: 'PUT', body: JSON.stringify({ settled }) }),
+  adminWeeklyPayouts: (status: PayoutStatusFilter = 'owed', weeks: PayoutPeriod = 'all') => request<{ data: WeeklyPayouts }>(`/admin/payouts/weekly${qs({ status, weeks: weeks === 'all' ? undefined : weeks })}`),
+  adminSettlePayouts: (paymentIds: string[], settled = true) => request<{ data: { updated: number; settled: boolean; amount: number } }>('/admin/payouts/settle', { method: 'PUT', body: JSON.stringify({ paymentIds, settled }) }),
 };

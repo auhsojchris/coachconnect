@@ -405,6 +405,149 @@ const settleGcashPayout = catchAsync(async (req, res) => {
   sendResponse(res, 200, 'Payout settlement updated', payment);
 });
 
+/** Monday (YYYY-MM-DD, Philippine time) of the week a moment falls in. */
+function localWeekStart(date) {
+  const day = new Date(`${localDay(date)}T00:00:00Z`);
+  day.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
+  return day.toISOString().slice(0, 10);
+}
+const addDays = (ymd, n) => {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const PAYOUT_STATUSES = ['owed', 'settled', 'all'];
+const PAYOUT_PERIODS = { 4: 4, 12: 12 }; // weeks; anything else = all time
+
+// GET /api/admin/payouts/weekly — coaches' net shares grouped into weekly
+// statements (Mon–Sun, by paid date), one line per coach per week, so the
+// admin sends each coach one transfer per week.
+//   ?status=owed|settled|all (default owed)  ?weeks=4|12 (default all time)
+const listWeeklyPayouts = catchAsync(async (req, res) => {
+  const status = PAYOUT_STATUSES.includes(req.query.status) ? req.query.status : 'owed';
+  const weeks = PAYOUT_PERIODS[req.query.weeks] || null;
+
+  const payments = await Payment.findAll({
+    where: { provider: { [Op.in]: PLATFORM_HELD }, status: 'paid', payoutAmount: { [Op.ne]: null } },
+    include: [{
+      model: Booking,
+      as: 'booking',
+      attributes: ['id'],
+      include: [
+        { model: User, as: 'client', attributes: ['id', 'name'] },
+        { model: TimeSlot, as: 'timeSlot', attributes: ['date', 'startTime', 'endTime'] },
+        {
+          model: Coach,
+          as: 'coach',
+          attributes: ['id', 'gcashNumber', 'gcashAccountName'],
+          include: [{ model: User, as: 'user', attributes: ['name', 'email'] }],
+        },
+      ],
+    }],
+  });
+
+  const cutoff = weeks ? addDays(localWeekStart(new Date()), -7 * (weeks - 1)) : null;
+  const summary = { owed: 0, settled: 0, coachesOwed: new Set(), oldestOwedWeek: null };
+  const weekMap = new Map();
+
+  for (const p of payments) {
+    const paidAt = p.paidAt || p.updatedAt;
+    const weekStart = localWeekStart(paidAt);
+    if (cutoff && weekStart < cutoff) continue;
+    const net = money(p.payoutAmount);
+    const coach = p.booking?.coach;
+    if (p.payoutSettled) summary.settled += net;
+    else {
+      summary.owed += net;
+      if (coach) summary.coachesOwed.add(coach.id);
+      if (!summary.oldestOwedWeek || weekStart < summary.oldestOwedWeek) summary.oldestOwedWeek = weekStart;
+    }
+
+    if (!weekMap.has(weekStart)) {
+      weekMap.set(weekStart, { weekStart, weekEnd: addDays(weekStart, 6), total: 0, owed: 0, settled: 0, coaches: new Map() });
+    }
+    const week = weekMap.get(weekStart);
+    const coachKey = coach?.id || 'unknown';
+    if (!week.coaches.has(coachKey)) {
+      week.coaches.set(coachKey, {
+        coachId: coach?.id || null,
+        name: coach?.user?.name || 'Unknown coach',
+        email: coach?.user?.email || null,
+        gcashNumber: coach?.gcashNumber || null,
+        gcashAccountName: coach?.gcashAccountName || null,
+        sessions: 0, gross: 0, commission: 0, net: 0, owed: 0, settled: 0, items: [],
+      });
+    }
+    const line = week.coaches.get(coachKey);
+    line.sessions += 1;
+    line.gross += money(p.amount);
+    line.commission += money(p.platformFeeAmount);
+    line.net += net;
+    line[p.payoutSettled ? 'settled' : 'owed'] += net;
+    week.total += net;
+    week[p.payoutSettled ? 'settled' : 'owed'] += net;
+    line.items.push({
+      paymentId: p.id,
+      client: p.booking?.client?.name || null,
+      sessionDate: p.booking?.timeSlot?.date || null,
+      startTime: p.booking?.timeSlot?.startTime?.slice(0, 5) || null,
+      paidAt,
+      provider: p.provider,
+      amount: money(p.amount),
+      commission: money(p.platformFeeAmount),
+      net,
+      settled: !!p.payoutSettled,
+    });
+  }
+
+  const keep = (owed, settled) => (status === 'owed' ? owed > 0 : status === 'settled' ? settled > 0 : true);
+  const result = [...weekMap.values()]
+    .map((w) => {
+      const coaches = [...w.coaches.values()]
+        .filter((c) => keep(c.owed, c.settled))
+        .map((c) => ({
+          ...c,
+          gross: money(c.gross), commission: money(c.commission), net: money(c.net), owed: money(c.owed), settled: money(c.settled),
+          status: c.owed === 0 ? 'settled' : c.settled === 0 ? 'owed' : 'partial',
+          items: c.items.sort((a, b) => new Date(a.paidAt) - new Date(b.paidAt)),
+        }))
+        .sort((a, b) => b.owed - a.owed || a.name.localeCompare(b.name));
+      return { ...w, total: money(w.total), owed: money(w.owed), settled: money(w.settled), coaches };
+    })
+    .filter((w) => w.coaches.length)
+    .sort((a, b) => (a.weekStart < b.weekStart ? 1 : -1));
+
+  sendResponse(res, 200, 'Weekly payouts retrieved', {
+    status,
+    weeks: weeks || 'all',
+    summary: {
+      owed: money(summary.owed),
+      settled: money(summary.settled),
+      coachesOwed: summary.coachesOwed.size,
+      oldestOwedWeek: summary.oldestOwedWeek,
+    },
+    statements: result,
+  });
+});
+
+// PUT /api/admin/payouts/settle — mark several payouts settled (or not) at
+// once, e.g. a coach's whole week after sending one transfer.
+const settlePayouts = catchAsync(async (req, res) => {
+  const { paymentIds } = req.body;
+  const settled = req.body.settled !== undefined ? req.body.settled : true;
+  const payments = await Payment.findAll({ where: { id: { [Op.in]: paymentIds } } });
+  if (payments.length !== new Set(paymentIds).size) throw ApiError.notFound('One or more payments were not found');
+  if (payments.some((p) => !PLATFORM_HELD.includes(p.provider) || p.status !== 'paid' || p.payoutAmount === null)) {
+    throw ApiError.badRequest('One or more payments have no coach payout to settle');
+  }
+  await Payment.update({ payoutSettled: settled }, { where: { id: { [Op.in]: paymentIds } } });
+  sendResponse(res, 200, 'Payout settlement updated', {
+    updated: payments.length,
+    settled,
+    amount: money(payments.reduce((s, p) => s + Number(p.payoutAmount), 0)),
+  });
+});
+
 // GET /api/admin/reviews — moderation queue (all reviews, optionally filtered)
 const listReviews = catchAsync(async (req, res) => {
   const { flagged, approved, page = 1, limit = 20 } = req.query;
@@ -484,4 +627,6 @@ module.exports = {
   settleGcashCommission,
   listGcashPayouts,
   settleGcashPayout,
+  listWeeklyPayouts,
+  settlePayouts,
 };

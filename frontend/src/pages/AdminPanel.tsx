@@ -3,6 +3,7 @@ import { Flag, ShieldCheck } from 'lucide-react';
 import { api, Payment, Review, Role, SportCategory, User } from '../services/api';
 import { Loading } from '../components/shared';
 import Overview from './AdminOverview';
+import PayoutsPanel from './AdminPayouts';
 
 type Tab = 'overview' | 'payments' | 'users' | 'categories' | 'reviews' | 'commissions' | 'payouts' | 'settings';
 
@@ -242,58 +243,6 @@ function CommissionsPanel() {
               <td><span className={`badge-status ${p.platformFeeSettled ? 'confirmed' : 'pending'}`}>{p.platformFeeSettled ? 'settled' : 'owed'}</span></td>
               <td style={{ textAlign: 'right' }}>
                 <button className="btn-outline" disabled={busyId === p.id} onClick={() => toggleSettled(p)}>{p.platformFeeSettled ? 'Mark unsettled' : 'Mark settled'}</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    )}
-  </div>;
-}
-
-function PayoutsPanel() {
-  const [payments, setPayments] = useState<Payment[]>([]);
-  const [totalOwed, setTotalOwed] = useState(0);
-  const [onlyUnsettled, setOnlyUnsettled] = useState(true);
-  const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState('');
-
-  const refresh = () => {
-    setLoading(true);
-    api.adminGcashPayouts(onlyUnsettled ? { settled: false } : {})
-      .then((r) => { setPayments(r.data); setTotalOwed(r.meta?.totalOwed || 0); })
-      .finally(() => setLoading(false));
-  };
-  useEffect(refresh, [onlyUnsettled]);
-
-  const toggleSettled = async (p: Payment) => {
-    setBusyId(p.id);
-    try { await api.adminSettleGcashPayout(p.id, !p.payoutSettled); refresh(); }
-    finally { setBusyId(''); }
-  };
-
-  return <div className="dash-panel">
-    <p className="muted" style={{ fontSize: '.8rem', marginBottom: 14 }}>Coaches' net share of payments the platform collected (QR and PayMongo). Send it to the coach's GCash number below, then mark it settled.</p>
-    <div className="filter-bar" style={{ justifyContent: 'space-between' }}>
-      <label style={{ display: 'flex', alignItems: 'center', gap: 8, width: 'auto', margin: 0 }}>
-        <input type="checkbox" style={{ width: 'auto', margin: 0 }} checked={onlyUnsettled} onChange={(e) => setOnlyUnsettled(e.target.checked)} /> Unsettled only
-      </label>
-      {!onlyUnsettled && <strong className="mono">₱{totalOwed.toLocaleString()} still owed</strong>}
-    </div>
-    {loading ? <Loading /> : payments.length === 0 ? <p className="muted">No GCash payouts to show.</p> : (
-      <table className="data-table">
-        <thead><tr><th>Coach</th><th>Coach GCash</th><th>Client</th><th>Booking amount</th><th>Net payout</th><th>Status</th><th></th></tr></thead>
-        <tbody>
-          {payments.map((p) => (
-            <tr key={p.id}>
-              <td>{p.booking?.coach?.user?.name || '—'}</td>
-              <td className="mono">{p.booking?.coach?.gcashNumber || 'not set'}</td>
-              <td>{p.booking?.client?.name || '—'}</td>
-              <td className="mono">₱{Number(p.amount).toLocaleString()}</td>
-              <td className="mono">₱{Number(p.payoutAmount || 0).toLocaleString()}</td>
-              <td><span className={`badge-status ${p.payoutSettled ? 'confirmed' : 'pending'}`}>{p.payoutSettled ? 'settled' : 'owed'}</span></td>
-              <td style={{ textAlign: 'right' }}>
-                <button className="btn-outline" disabled={busyId === p.id} onClick={() => toggleSettled(p)}>{p.payoutSettled ? 'Mark unsettled' : 'Mark settled'}</button>
               </td>
             </tr>
           ))}
